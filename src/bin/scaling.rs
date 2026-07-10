@@ -3,7 +3,9 @@
 //! fixed op count under the workload's read/write mix, and records wall-clock throughput.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
+use concurrent_roaring::{
+    ConcurrentRoaringBitmap, EpochRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap,
+};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::{self, OpenOptions};
@@ -41,6 +43,15 @@ impl ConcurrentBench for SnapshotRoaringBitmap {
     }
     fn contains(&self, x: u32) -> bool {
         SnapshotRoaringBitmap::contains(self, x)
+    }
+}
+
+impl ConcurrentBench for EpochRoaringBitmap {
+    fn insert(&self, x: u32) -> bool {
+        EpochRoaringBitmap::insert(self, x)
+    }
+    fn contains(&self, x: u32) -> bool {
+        EpochRoaringBitmap::contains(self, x)
     }
 }
 
@@ -164,7 +175,7 @@ fn main() {
         .collect();
 
     let workloads: [(&str, u32); 3] = [("read95", 95), ("mixed50", 50), ("write95", 5)];
-    let structures = ["sequential", "sharded", "snapshot"];
+    let structures = ["sequential", "sharded", "snapshot", "epoch"];
 
     let data = datasets::clustered();
     let mut rows: Vec<Row> = Vec::new();
@@ -189,6 +200,13 @@ fn main() {
                     }
                     "snapshot" => {
                         let bench = SnapshotRoaringBitmap::new();
+                        for &x in &data {
+                            bench.insert(x);
+                        }
+                        run_concurrent(&bench, &data, read_pct, threads)
+                    }
+                    "epoch" => {
+                        let bench = EpochRoaringBitmap::new();
                         for &x in &data {
                             bench.insert(x);
                         }

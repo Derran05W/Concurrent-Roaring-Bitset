@@ -12,6 +12,9 @@ rand = "0.9"
 parking_lot = "0.12"
 # Lock-free read path: readers load an immutable snapshot pointer via `ArcSwap` with no lock.
 arc-swap = "1"
+# Lock-free read path with epoch-based reclamation: readers pin an epoch and load an `Atomic`
+# pointer; retired snapshots are freed via `defer_destroy` once no pinned reader can observe them.
+crossbeam-epoch = "0.9"
 
 [dev-dependencies]
 criterion = "0.5"

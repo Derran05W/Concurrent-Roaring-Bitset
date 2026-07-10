@@ -4,7 +4,7 @@
 //! bodies are written once rather than triplicated.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::{ConcurrentRoaringBitmap, SnapshotRoaringBitmap};
+use concurrent_roaring::{ConcurrentRoaringBitmap, EpochRoaringBitmap, SnapshotRoaringBitmap};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeSet;
@@ -108,3 +108,4 @@ macro_rules! stress_suite {
 
 stress_suite!(sharded, ConcurrentRoaringBitmap);
 stress_suite!(snapshot, SnapshotRoaringBitmap);
+stress_suite!(epoch, EpochRoaringBitmap);

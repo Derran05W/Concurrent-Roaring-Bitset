@@ -5,4 +5,4 @@ pub mod concurrent;
 pub mod container;
 
 pub use bitmap::RoaringBitmap;
-pub use concurrent::{ConcurrentRoaringBitmap, SnapshotRoaringBitmap};
+pub use concurrent::{ConcurrentRoaringBitmap, EpochRoaringBitmap, SnapshotRoaringBitmap};

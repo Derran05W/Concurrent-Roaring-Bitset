@@ -3,7 +3,9 @@
 //! pinned-seed inputs.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
+use concurrent_roaring::{
+    ConcurrentRoaringBitmap, EpochRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap,
+};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -175,6 +177,13 @@ impl TaxBench for SnapshotRoaringBitmap {
     }
 }
 
+impl TaxBench for EpochRoaringBitmap {
+    fn insert(&mut self, x: u32) -> bool {
+        // &self op; the &mut here just satisfies the shared trait signature.
+        EpochRoaringBitmap::insert(self, x)
+    }
+}
+
 fn build_tax<T: TaxBench>(data: &[u32]) -> T {
     let mut b = T::default();
     for &x in data {
@@ -200,11 +209,15 @@ fn bench_tax(c: &mut Criterion) {
     g.bench_function("snapshot", |b| {
         b.iter(|| black_box(build_tax::<SnapshotRoaringBitmap>(&data)))
     });
+    g.bench_function("epoch", |b| {
+        b.iter(|| black_box(build_tax::<EpochRoaringBitmap>(&data)))
+    });
     g.finish();
 
     let seq = build_tax::<RoaringBitmap>(&data);
     let shard = build_tax::<ConcurrentRoaringBitmap>(&data);
     let snap = build_tax::<SnapshotRoaringBitmap>(&data);
+    let ep = build_tax::<EpochRoaringBitmap>(&data);
     let mut g = c.benchmark_group("tax/contains_clustered");
     g.bench_function("sequential", |b| {
         b.iter(|| {
@@ -224,6 +237,13 @@ fn bench_tax(c: &mut Criterion) {
         b.iter(|| {
             for &x in &probes {
                 black_box(snap.contains(x));
+            }
+        })
+    });
+    g.bench_function("epoch", |b| {
+        b.iter(|| {
+            for &x in &probes {
+                black_box(ep.contains(x));
             }
         })
     });
