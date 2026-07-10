@@ -131,7 +131,7 @@ Deviations: none
 Next: P1
 
 ### P1 — `ArrayContainer` + `Container` enum (2026-07-09)
-Commit: _pending_
+Commit: c050b1d
 Done: `ArrayContainer` (sorted `Vec<u16>`) with `new`/`cardinality`/`is_empty`/`contains`/
 `insert`/`remove`/`num_runs`/`as_slice` per §2.4 array formula; `Container` enum introduced with
 only the `Array` variant, dispatching all six ops. Unit tests (0/65535 boundaries, dup/absent,
