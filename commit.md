@@ -570,7 +570,7 @@ Next: — (project complete)
 ---
 
 ### POLISH — Post-P9 review pass (2026-07-10)
-Commit: (fill at commit time)
+Commit: 50325db
 Done: Review-pass cleanups. Comments: five what-comments trimmed (run.rs ×4, bitmap.rs ×1) per §1.3.
 Code: `and_run_run`/`or_run_run` outputs presized (symmetry with the array kernels; effect below
 criterion noise — ledger numbers not re-measured); `RunContainer::to_array` now pushes ascending
