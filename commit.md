@@ -172,7 +172,7 @@ Deviations: none
 Next: P4
 
 ### P4 — `RoaringBitmap` top level + differential testing (2026-07-09)
-Commit: <pending>
+Commit: 2a4fa35
 Done: `split`/`join` value-model helpers (`bitmap.rs`) with boundary units; top-level
 `RoaringBitmap` (`Vec<(u16, Container)>` sorted-unique-by-key) with `new`/`insert`/`remove`
 (drops emptied containers per the never-empty invariant) / `contains` / `len` (no cached global
