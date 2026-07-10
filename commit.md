@@ -306,7 +306,7 @@ Next: P7
 ---
 
 ### P7 — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling + tax (2026-07-09)
-Commit: <filled post-commit>
+Commit: 0c09507
 Done: `ConcurrentRoaringBitmap` (`Box<[parking_lot::RwLock<RoaringBitmap>]>`, power-of-two shards,
 default 64, `key & mask` low-bit sharding) with `new`/`with_shard_count`/`insert`/`remove`/`contains`
 /`len`/`is_empty`/`snapshot`/`and`/`or`/`optimize`; per-shard-atomic (non-linearizable) cross-shard
