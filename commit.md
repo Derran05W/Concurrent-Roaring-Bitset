@@ -550,7 +550,7 @@ Next: P9
 ---
 
 ### P9 — Comparative writeup, graphs, resume bullets (2026-07-10)
-Commit: _recorded post-commit_
+Commit: 4a40207
 Done: `scripts/plot.py` (matplotlib + stdlib `csv`; reads `bench-results/scaling.csv`, emits
 `docs/graphs/read_scaling.png` and `docs/graphs/write_impact.png` — log-scale throughput vs
 threads, one line per structure, both committed). `README.md` with the eight prescribed sections
