@@ -10,6 +10,8 @@ rand = "0.9"
 # Why parking_lot over std::sync: no lock poisoning (no `.unwrap()` on every access) and a faster
 # uncontended path — exactly what the P7 concurrency-tax measurement stresses.
 parking_lot = "0.12"
+# P8a: lock-free read path — readers load an immutable snapshot pointer via `ArcSwap` with no lock.
+arc-swap = "1"
 
 [dev-dependencies]
 criterion = "0.5"

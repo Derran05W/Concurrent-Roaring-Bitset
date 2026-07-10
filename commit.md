@@ -20,7 +20,7 @@ implementation departed from the plan in any way.
 - [x] **P5** — Set operations (`and` / `or`)
 - [x] **P6** — Sequential baseline benchmarks (Baseline B recorded)
 - [x] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
-- [ ] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
+- [x] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
 - [ ] **P8b** — `EpochRoaringBitmap` (`crossbeam-epoch` lock-free reads)
 - [ ] **P9** — Comparative writeup, graphs, resume bullets
 
@@ -113,35 +113,71 @@ P8:
 
 ### P8 — Full comparative matrix
 
-Tax (single-threaded, all structures vs sequential):
+_Filled incrementally: the sharded and snapshot rows below are from the P8a run (all internally
+consistent — one `cargo bench -- tax/` invocation, one `scaling` run). The `epoch` rows and the
+final written reading land with P8b, which reruns the full matrix fresh into the CSV._
+
+Tax (single-threaded, all structures vs sequential; overhead = variant ÷ sequential − 1, criterion
+median. Same-run sequential baselines: build/clustered 12.523 ms, contains/clustered 23.034 ms):
 
 | Structure | build overhead % | contains overhead % |
 |---|---|---|
-| sharded | | |
-| snapshot | | |
-| epoch | | |
+| sharded | **−32.1%** (8.501 ms) | **−27.3%** (16.736 ms) |
+| snapshot | **+4074%** (522.7 ms, ≈41.7×) | **−20.2%** (18.387 ms) |
+| epoch | _(P8b)_ | _(P8b)_ |
 
-Scaling at read95 (Mops/s):
+Scaling at read95 (Mops/s; 16t clamped — M5 reports 10 logical cores):
 
 | Structure | 1t | 2t | 4t | 8t | 16t |
 |---|---|---|---|---|---|
-| sharded | | | | | |
-| snapshot | | | | | |
-| epoch | | | | | |
+| sharded | 21.48 | 29.94 | 49.95 | 50.29 | n/a |
+| snapshot | 1.93 | 1.85 | 2.60 | 3.46 | n/a |
+| epoch | _(P8b)_ | | | | |
 
 Scaling at write95 (Mops/s):
 
 | Structure | 1t | 2t | 4t | 8t | 16t |
 |---|---|---|---|---|---|
-| sharded | | | | | |
-| snapshot | | | | | |
-| epoch | | | | | |
+| sharded | 12.20 | 20.40 | 33.23 | 26.32 | n/a |
+| snapshot | 0.045 | 0.068 | 0.093 | 0.099 | n/a |
+| epoch | _(P8b)_ | | | | |
 
-_Written reading of results (required by P8 exit): …_
+**Partial reading of the P8a results (finalized at P8b with the epoch row).** The snapshot type is a
+*read*-optimized structure, and the numbers say so with unusual clarity:
+
+- **Reads are genuinely fast.** The pure-read `contains` tax is **−20.2%** — lock-free `ArcSwap::load`
+  plus shard-partitioned (shorter) per-shard vectors beat the sequential map. It loses to the sharded
+  `RwLock` read (16.74 ms) by ~10% because `arc-swap`'s load-and-debt bookkeeping is slightly heavier
+  than a `parking_lot` reader acquire, but both beat sequential.
+- **Writes pay a full-shard clone, and it is brutal on write-heavy loads.** The `build` tax is
+  **+4074% (≈42×)**: build is an all-insert workload, and every insert clones the entire shard's
+  `RoaringBitmap` before mutating (single-writer RCU), making incremental build effectively O(N²)
+  per shard. This is not a defect — it is the deliberate tradeoff being measured (§P8 preamble). T1
+  (≤10% tax) is therefore met for reads and **intentionally missed** for the write path; the cause is
+  structural, not a regression.
+- **In the scaling harness every workload contains writes, so throughput is clone-bound, not
+  read-bound.** Even `read95` (5% writes) sits at 1.9–3.5 Mops because those 5% of ops each clone a
+  large clustered shard; `write95` collapses to ~0.05–0.10 Mops. Reads *do* scale with threads
+  (read95 1.93→3.46, ≈1.8× at 8t — the lock-free path adds no shared write), but the serialized
+  per-shard clones cap it far below the sharded structure on any write-containing mix.
+- **Lever for the write cost:** clone size is per-shard, so `with_shard_count(256)` (vs the default 64)
+  shrinks each cloned unit ~4× and would lift the write-heavy numbers proportionally — the plan flags
+  this exact mitigation. Not run here; noted for the P9 tradeoff analysis.
+
+The takeaway the P8b epoch row will sharpen: `SnapshotRoaringBitmap` trades write throughput for a
+lock-free read path that is faster than both the sequential map and (marginally slower than) the
+`RwLock` reader — a win only on read-dominated-to-read-only workloads, exactly the regime it targets.
 
 ---
 
 ## Deviations from Plan
+
+**P8a · 2026-07-09** — `insert` and `remove` share one private RCU helper `update(x, present: bool)`
+rather than two mirrored bodies. The plan describes remove as "the mirror" of insert with an
+identical no-op-short-circuit + clone + store shape, so this is a faithful single-source
+implementation of the prescribed logic (behaviour is byte-identical: `present` is the membership the
+op targets, the short-circuit is `cur.contains(x) == present`), not a semantic departure. Noted only
+so a reader diffing against the plan's two-signature sketch finds the one function.
 
 **P7 · 2026-07-09** — The prescribed bench-local tax trait was to carry both
 `insert(&mut self)` *and* `contains(&self)`. In practice `contains` in the trait is dead code: both
@@ -325,6 +361,28 @@ motivates P8). See P7 tables.
 Deviations: **P7 · 2026-07-09** — tax trait omits dead `contains`; scaling `sequential` runs lock-free.
 See Deviations section.
 Next: P8a
+
+---
+
+### P8a — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads) (2026-07-09)
+Commit: <filled by the follow-up hash-record commit>
+Done: `SnapshotRoaringBitmap` (`Box<[Shard]>` where each `Shard` = `arc_swap::ArcSwap<RoaringBitmap>`
++ per-shard writer `Mutex<()>`; power-of-two shards, default 64, `key & mask` low-bit sharding).
+Reads (`contains`/`len`/`is_empty`/`snapshot`) take no lock — they `ArcSwap::load` an immutable
+snapshot pointer. Writes (`insert`/`remove`/`optimize`) are single-writer RCU: lock the shard mutex,
+clone the current snapshot, mutate the clone, `store` it; `insert`/`remove` share one `update(x,
+present)` helper with a no-op short-circuit that skips the clone when membership already matches.
+Reclamation is `Arc` refcounting (readers holding a guard keep the old snapshot alive). `arc-swap =
+"1"` added. Wired into `lib.rs`, the `stress_suite!` macro (both P7 patterns now stamped for sharded
++ snapshot), the scaling harness (`snapshot` structure), and the tax bench (`snapshot` arm).
+Measured: Baseline A tax — reads **−20.2%** (lock-free load + shard partition beats sequential),
+build **+4074% (≈42×)** (clone-per-insert ⇒ O(N²) build; the deliberate read-optimized tradeoff, T1
+intentionally missed on the write path with cause). Scaling: read95 1.9→3.5 Mops (reads scale ~1.8×
+at 8t but every workload's writes are clone-bound); write95 collapses to ~0.05–0.10 Mops. See the P8
+comparative tables. Stress suite (both patterns) green for sharded + snapshot under `--release`.
+Deviations: **P8a · 2026-07-09** — `insert`/`remove` share one `update()` helper (faithful to the
+plan's "remove is the mirror"). See Deviations section.
+Next: P8b
 
 ---
 

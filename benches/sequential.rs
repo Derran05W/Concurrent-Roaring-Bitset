@@ -3,7 +3,7 @@
 //! reference `roaring::RoaringBitmap` side by side on identical, pinned-seed inputs.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap};
+use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -169,6 +169,13 @@ impl TaxBench for ConcurrentRoaringBitmap {
     }
 }
 
+impl TaxBench for SnapshotRoaringBitmap {
+    fn insert(&mut self, x: u32) -> bool {
+        // &self op; the &mut here just satisfies the shared trait signature.
+        SnapshotRoaringBitmap::insert(self, x)
+    }
+}
+
 fn build_tax<T: TaxBench>(data: &[u32]) -> T {
     let mut b = T::default();
     for &x in data {
@@ -177,8 +184,8 @@ fn build_tax<T: TaxBench>(data: &[u32]) -> T {
     b
 }
 
-/// Baseline A (concurrency tax): sequential `RoaringBitmap` vs `ConcurrentRoaringBitmap` run
-/// single-threaded on clustered build + contains. The gap is the cost of the sharding/locking
+/// Baseline A (concurrency tax): sequential `RoaringBitmap` vs each concurrent type run
+/// single-threaded on clustered build + contains. The gap is the cost of the sharding/locking/RCU
 /// machinery when there is no contention.
 fn bench_tax(c: &mut Criterion) {
     let data = datasets::clustered();
@@ -191,10 +198,14 @@ fn bench_tax(c: &mut Criterion) {
     g.bench_function("sharded", |b| {
         b.iter(|| black_box(build_tax::<ConcurrentRoaringBitmap>(&data)))
     });
+    g.bench_function("snapshot", |b| {
+        b.iter(|| black_box(build_tax::<SnapshotRoaringBitmap>(&data)))
+    });
     g.finish();
 
     let seq = build_tax::<RoaringBitmap>(&data);
     let shard = build_tax::<ConcurrentRoaringBitmap>(&data);
+    let snap = build_tax::<SnapshotRoaringBitmap>(&data);
     let mut g = c.benchmark_group("tax/contains_clustered");
     g.bench_function("sequential", |b| {
         b.iter(|| {
@@ -207,6 +218,13 @@ fn bench_tax(c: &mut Criterion) {
         b.iter(|| {
             for &x in &probes {
                 black_box(shard.contains(x));
+            }
+        })
+    });
+    g.bench_function("snapshot", |b| {
+        b.iter(|| {
+            for &x in &probes {
+                black_box(snap.contains(x));
             }
         })
     });

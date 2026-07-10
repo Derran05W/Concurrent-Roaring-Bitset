@@ -4,7 +4,7 @@
 //! P8 to register the lock-free structures.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap};
+use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::{self, OpenOptions};
@@ -33,6 +33,15 @@ impl ConcurrentBench for ConcurrentRoaringBitmap {
     }
     fn contains(&self, x: u32) -> bool {
         ConcurrentRoaringBitmap::contains(self, x)
+    }
+}
+
+impl ConcurrentBench for SnapshotRoaringBitmap {
+    fn insert(&self, x: u32) -> bool {
+        SnapshotRoaringBitmap::insert(self, x)
+    }
+    fn contains(&self, x: u32) -> bool {
+        SnapshotRoaringBitmap::contains(self, x)
     }
 }
 
@@ -156,7 +165,7 @@ fn main() {
         .collect();
 
     let workloads: [(&str, u32); 3] = [("read95", 95), ("mixed50", 50), ("write95", 5)];
-    let structures = ["sequential", "sharded"];
+    let structures = ["sequential", "sharded", "snapshot"];
 
     let data = datasets::clustered();
     let mut rows: Vec<Row> = Vec::new();
@@ -174,6 +183,13 @@ fn main() {
                     "sequential" => run_sequential(&data, read_pct),
                     "sharded" => {
                         let bench = ConcurrentRoaringBitmap::new();
+                        for &x in &data {
+                            bench.insert(x);
+                        }
+                        run_concurrent(&bench, &data, read_pct, threads)
+                    }
+                    "snapshot" => {
+                        let bench = SnapshotRoaringBitmap::new();
                         for &x in &data {
                             bench.insert(x);
                         }
