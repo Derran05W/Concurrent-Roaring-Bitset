@@ -121,7 +121,7 @@ Next: P<n+1>
 ```
 
 ### P0 — Repository scaffold & harness (2026-07-09)
-Commit: _pending_
+Commit: 8719b50
 Done: `cargo init --lib` (crate `concurrent_roaring`, edition 2021); §2.1 sequential-subset
 skeleton (`lib.rs`, `bitmap.rs`, `container/{mod,array,bitmap,run}.rs`, `benches/sequential.rs`,
 `tests/smoke.rs`), each module a `//!` doc stub; dev-deps criterion/proptest/roaring/rand;
