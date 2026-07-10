@@ -525,7 +525,7 @@ Next: P8b
 ---
 
 ### P8b — `EpochRoaringBitmap` (`crossbeam-epoch` lock-free reads) (2026-07-10)
-Commit: _(recorded in follow-up)_
+Commit: f1de04c
 Done: `EpochRoaringBitmap` (`Box<[Shard]>`; each 128-byte-padded `Shard` =
 `crossbeam_epoch::Atomic<RoaringBitmap>` + writer `Mutex<()>`; power-of-two shards, default 64,
 `key & mask` low-bit sharding). Reads (`contains`/`len`/`is_empty`/`snapshot`) pin an epoch and
