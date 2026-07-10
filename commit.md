@@ -157,7 +157,7 @@ Deviations: none
 Next: P3
 
 ### P3 — `RunContainer` + smallest-of-three `optimize` (2026-07-09)
-Commit: <pending>
+Commit: dc7a259
 Done: `RunContainer` (`Vec<Run>` + cached `u32` cardinality; `Run{start,len}`, len=count−1) with
 `contains`/`insert` (extend/merge/isolated) / `remove` (shrink/split) / `cardinality`/`is_empty`/
 `num_runs`/`from_array`/`from_bitmap`/`to_array`/`to_bitmap` and `pub(crate) runs()`; all boundary
