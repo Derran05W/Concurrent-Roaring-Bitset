@@ -14,7 +14,7 @@ implementation departed from the plan in any way.
 
 - [x] **P0** — Repository scaffold & harness
 - [x] **P1** — `ArrayContainer` + `Container` enum
-- [ ] **P2** — `BitmapContainer` + array↔bitmap conversion
+- [x] **P2** — `BitmapContainer` + array↔bitmap conversion
 - [ ] **P3** — `RunContainer` + smallest-of-three `optimize`
 - [ ] **P4** — `RoaringBitmap` top level + differential testing
 - [ ] **P5** — Set operations (`and` / `or`)
@@ -142,6 +142,19 @@ Deviations: `as_slice` carries a site-local `#[allow(dead_code)]` (why-comment):
 P1 deliverable but first consumed by P2/P5, so the lib-only build sees it unused. Not a plan
 deviation — the plan prescribes the method.
 Next: P2
+
+### P2 — `BitmapContainer` + array↔bitmap conversion (2026-07-09)
+Commit: <pending>
+Done: `BitmapContainer` (`Box<[u64; 1024]>` + cached `u32` cardinality) with
+`new`/`from_array`/`to_array`/`contains`/`insert`/`remove`/`cardinality`/`is_empty`/`num_runs`
+(bit-trick fold with word-boundary correction) and `pub(crate) words()`. `Container` gained the
+`Bitmap` variant; §2.4 conversion policy lives in `Container::insert` (array→bitmap pre-convert on
+the 4097th distinct value) and `Container::remove` (bitmap→array at cardinality exactly 4096).
+Tests: cross-representation agreement proptest, `to_array∘from_array` round-trip, `num_runs`
+word-boundary units (incl. the −1 correction), and threshold-through-`Container` (unit + proptest).
+Measured: n/a
+Deviations: none
+Next: P3
 
 ---
 
