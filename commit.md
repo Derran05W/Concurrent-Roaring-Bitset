@@ -198,7 +198,7 @@ the leaf accessors are, keeping representation knowledge out of `bitmap.rs`.
 Next: P5
 
 ### P5 — Set operations (`and` / `or`) (2026-07-09)
-Commit: <filled at commit>
+Commit: de2f0fe
 Done: Top-level `RoaringBitmap::and`/`or` (two-pointer merge-join over the sorted key vecs — `and`
 intersects shared keys and drops empty results; `or` carries single-side containers over cloned and
 kernel-merges shared keys) plus `BitAnd`/`BitOr`/`BitAndAssign`/`BitOrAssign` operator delegations.
