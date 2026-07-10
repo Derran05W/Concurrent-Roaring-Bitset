@@ -91,10 +91,18 @@ impl BitmapContainer {
         runs
     }
 
-    // Consumed by P5 set-op kernels; unused within P2 alone.
-    #[allow(dead_code)]
     pub(crate) fn words(&self) -> &[u64; 1024] {
         &self.words
+    }
+
+    /// Build from precomputed words + cardinality (the P5 kernels compute both directly). Caller
+    /// guarantees `cardinality` equals the popcount of `words`.
+    pub(crate) fn from_words(words: Box<[u64; 1024]>, cardinality: u32) -> Self {
+        debug_assert_eq!(
+            cardinality,
+            words.iter().map(|w| w.count_ones()).sum::<u32>()
+        );
+        Self { words, cardinality }
     }
 }
 

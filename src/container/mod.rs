@@ -6,7 +6,7 @@ pub mod run;
 
 use array::ArrayContainer;
 use bitmap::BitmapContainer;
-use run::RunContainer;
+use run::{Run, RunContainer};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Container {
@@ -164,6 +164,289 @@ impl Container {
                 *self = Container::Run(r);
             }
         }
+    }
+
+    /// Intersection of two containers. The kernel picks the natural result representation; every
+    /// result passes through `normalize` so it obeys §2.4 representation legality.
+    pub(crate) fn and(&self, other: &Container) -> Container {
+        normalize(match (self, other) {
+            (Container::Array(a), Container::Array(b)) => and_array_array(a, b),
+            (Container::Bitmap(a), Container::Bitmap(b)) => and_bitmap_bitmap(a, b),
+            (Container::Run(a), Container::Run(b)) => and_run_run(a, b),
+            // Mirrored pairs delegate with the arguments in a fixed order.
+            (Container::Array(a), Container::Bitmap(b))
+            | (Container::Bitmap(b), Container::Array(a)) => and_array_bitmap(a, b),
+            (Container::Array(a), Container::Run(r)) | (Container::Run(r), Container::Array(a)) => {
+                and_array_run(a, r)
+            }
+            (Container::Bitmap(b), Container::Run(r))
+            | (Container::Run(r), Container::Bitmap(b)) => and_bitmap_run(b, r),
+        })
+    }
+
+    /// Union of two containers. Same normalization discipline as `and`.
+    pub(crate) fn or(&self, other: &Container) -> Container {
+        normalize(match (self, other) {
+            (Container::Array(a), Container::Array(b)) => or_array_array(a, b),
+            (Container::Bitmap(a), Container::Bitmap(b)) => or_bitmap_bitmap(a, b),
+            (Container::Run(a), Container::Run(b)) => or_run_run(a, b),
+            (Container::Array(a), Container::Bitmap(b))
+            | (Container::Bitmap(b), Container::Array(a)) => or_array_bitmap(a, b),
+            (Container::Array(a), Container::Run(r)) | (Container::Run(r), Container::Array(a)) => {
+                or_array_run(a, r)
+            }
+            (Container::Bitmap(b), Container::Run(r))
+            | (Container::Run(r), Container::Bitmap(b)) => or_bitmap_run(b, r),
+        })
+    }
+}
+
+/// Keep a kernel result representation legal per §2.4: a bitmap that dropped to the array threshold
+/// becomes an array; a run list that outgrew a bitmap becomes a bitmap. (This is legality only, not
+/// the smallest-of-three `optimize` — kernels never *shrink* below what the operation produced.)
+fn normalize(c: Container) -> Container {
+    match c {
+        Container::Bitmap(b) if b.cardinality() <= 4096 => Container::Array(b.to_array()),
+        Container::Run(r) if 4 * r.num_runs() > 8192 => Container::Bitmap(r.to_bitmap()),
+        other => other,
+    }
+}
+
+fn and_array_array(a: &ArrayContainer, b: &ArrayContainer) -> Container {
+    let (sa, sb) = (a.as_slice(), b.as_slice());
+    // Result ⊆ smaller input, so cardinality ≤ 4096: Array is always legal.
+    let mut out = Vec::with_capacity(sa.len().min(sb.len()));
+    let (mut i, mut j) = (0, 0);
+    while i < sa.len() && j < sb.len() {
+        let (x, y) = (sa[i], sb[j]);
+        if x < y {
+            i += 1;
+        } else if x > y {
+            j += 1;
+        } else {
+            out.push(x);
+            i += 1;
+            j += 1;
+        }
+    }
+    Container::Array(ArrayContainer::from_sorted_vec(out))
+}
+
+fn or_array_array(a: &ArrayContainer, b: &ArrayContainer) -> Container {
+    // If the sum can't exceed the array threshold, the union certainly can't: merge-dedup → Array.
+    if a.cardinality() + b.cardinality() <= 4096 {
+        let (sa, sb) = (a.as_slice(), b.as_slice());
+        let mut out = Vec::with_capacity(sa.len() + sb.len());
+        let (mut i, mut j) = (0, 0);
+        while i < sa.len() && j < sb.len() {
+            let (x, y) = (sa[i], sb[j]);
+            if x < y {
+                out.push(x);
+                i += 1;
+            } else if x > y {
+                out.push(y);
+                j += 1;
+            } else {
+                out.push(x);
+                i += 1;
+                j += 1;
+            }
+        }
+        out.extend_from_slice(&sa[i..]);
+        out.extend_from_slice(&sb[j..]);
+        Container::Array(ArrayContainer::from_sorted_vec(out))
+    } else {
+        // Overflow the threshold: build a bitmap and let `normalize` drop it back to an array if
+        // duplicate values kept the true union ≤ 4096.
+        let mut bm = BitmapContainer::from_array(a);
+        for &v in b.as_slice() {
+            bm.insert(v);
+        }
+        Container::Bitmap(bm)
+    }
+}
+
+fn and_array_bitmap(a: &ArrayContainer, b: &BitmapContainer) -> Container {
+    // Result ⊆ the array, so cardinality ≤ 4096: Array is legal.
+    let mut out = Vec::with_capacity(a.as_slice().len());
+    for &v in a.as_slice() {
+        if b.contains(v) {
+            out.push(v);
+        }
+    }
+    Container::Array(ArrayContainer::from_sorted_vec(out))
+}
+
+fn or_array_bitmap(a: &ArrayContainer, b: &BitmapContainer) -> Container {
+    // Result ⊇ the bitmap, whose cardinality is already > 4096: Bitmap stays legal.
+    let mut bm = b.clone();
+    for &v in a.as_slice() {
+        bm.insert(v);
+    }
+    Container::Bitmap(bm)
+}
+
+fn and_array_run(a: &ArrayContainer, r: &RunContainer) -> Container {
+    let mut out = Vec::with_capacity(a.as_slice().len());
+    for &v in a.as_slice() {
+        if r.contains(v) {
+            out.push(v);
+        }
+    }
+    Container::Array(ArrayContainer::from_sorted_vec(out))
+}
+
+fn or_array_run(a: &ArrayContainer, r: &RunContainer) -> Container {
+    let mut rc = r.clone();
+    for &v in a.as_slice() {
+        rc.insert(v);
+    }
+    Container::Run(rc)
+}
+
+fn and_bitmap_bitmap(a: &BitmapContainer, b: &BitmapContainer) -> Container {
+    let (wa, wb) = (a.words(), b.words());
+    let mut words = Box::new([0u64; 1024]);
+    let mut card = 0u32;
+    for i in 0..1024 {
+        let w = wa[i] & wb[i];
+        words[i] = w;
+        card += w.count_ones();
+    }
+    Container::Bitmap(BitmapContainer::from_words(words, card))
+}
+
+fn or_bitmap_bitmap(a: &BitmapContainer, b: &BitmapContainer) -> Container {
+    let (wa, wb) = (a.words(), b.words());
+    let mut words = Box::new([0u64; 1024]);
+    let mut card = 0u32;
+    for i in 0..1024 {
+        let w = wa[i] | wb[i];
+        words[i] = w;
+        card += w.count_ones();
+    }
+    Container::Bitmap(BitmapContainer::from_words(words, card))
+}
+
+fn and_bitmap_run(b: &BitmapContainer, r: &RunContainer) -> Container {
+    let src = b.words();
+    let mut words = Box::new([0u64; 1024]);
+    // Result starts empty; runs are disjoint in value space, so their masks touch disjoint bits and
+    // OR-ing the masked source words in is equivalent to copying the intersection.
+    for run in r.runs() {
+        let start = run.start as u32;
+        let end = start + run.len as u32;
+        for_range_words(start, end, |i, mask| words[i] |= src[i] & mask);
+    }
+    let card = words.iter().map(|w| w.count_ones()).sum();
+    Container::Bitmap(BitmapContainer::from_words(words, card))
+}
+
+fn or_bitmap_run(b: &BitmapContainer, r: &RunContainer) -> Container {
+    // Copy the bitmap's words, then set every run's bit range to 1s. Result ⊇ the bitmap (> 4096).
+    let mut words = Box::new(*b.words());
+    for run in r.runs() {
+        let start = run.start as u32;
+        let end = start + run.len as u32;
+        for_range_words(start, end, |i, mask| words[i] |= mask);
+    }
+    let card = words.iter().map(|w| w.count_ones()).sum();
+    Container::Bitmap(BitmapContainer::from_words(words, card))
+}
+
+fn and_run_run(a: &RunContainer, b: &RunContainer) -> Container {
+    let (ra, rb) = (a.runs(), b.runs());
+    let mut out: Vec<Run> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < ra.len() && j < rb.len() {
+        // Boundary math in u32: start + len can reach 65535 (§P3 rule).
+        let a_start = ra[i].start as u32;
+        let a_end = a_start + ra[i].len as u32;
+        let b_start = rb[j].start as u32;
+        let b_end = b_start + rb[j].len as u32;
+        let lo = a_start.max(b_start);
+        let hi = a_end.min(b_end);
+        if lo <= hi {
+            out.push(Run {
+                start: lo as u16,
+                len: (hi - lo) as u16,
+            });
+        }
+        // Advance whichever run ends first (both, on a tie): its successor may still meet the other.
+        if a_end < b_end {
+            i += 1;
+        } else if b_end < a_end {
+            j += 1;
+        } else {
+            i += 1;
+            j += 1;
+        }
+    }
+    let card = out.iter().map(|r| r.len as u32 + 1).sum();
+    Container::Run(RunContainer::from_runs(out, card))
+}
+
+fn or_run_run(a: &RunContainer, b: &RunContainer) -> Container {
+    let (ra, rb) = (a.runs(), b.runs());
+    let mut out: Vec<Run> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    loop {
+        // Take the next run by ascending start across both lists.
+        let next = match (i < ra.len(), j < rb.len()) {
+            (true, true) => {
+                if ra[i].start <= rb[j].start {
+                    i += 1;
+                    ra[i - 1]
+                } else {
+                    j += 1;
+                    rb[j - 1]
+                }
+            }
+            (true, false) => {
+                i += 1;
+                ra[i - 1]
+            }
+            (false, true) => {
+                j += 1;
+                rb[j - 1]
+            }
+            (false, false) => break,
+        };
+        let s = next.start as u32;
+        let e = s + next.len as u32;
+        if let Some(last) = out.last_mut() {
+            let last_end = last.start as u32 + last.len as u32;
+            // Overlapping or merely adjacent (gap 0) runs coalesce into one, keeping runs non-adjacent.
+            if s <= last_end + 1 {
+                if e > last_end {
+                    last.len = (e - last.start as u32) as u16;
+                }
+                continue;
+            }
+        }
+        out.push(next);
+    }
+    let card = out.iter().map(|r| r.len as u32 + 1).sum();
+    Container::Run(RunContainer::from_runs(out, card))
+}
+
+/// Invoke `f(word_index, mask)` for each 64-bit word overlapping the inclusive value range
+/// `[start, end]`, where `mask` has exactly this word's in-range bits set. Shared by the bitmap·run
+/// kernels: `!0 << (start & 63)` keeps the high tail of the first word, `!0 >> (63 - (end & 63))`
+/// keeps the low head of the last word, and interior words are fully covered.
+fn for_range_words(start: u32, end: u32, mut f: impl FnMut(usize, u64)) {
+    let sw = (start >> 6) as usize;
+    let ew = (end >> 6) as usize;
+    let sb = start & 63;
+    let eb = end & 63;
+    if sw == ew {
+        f(sw, (!0u64 << sb) & (!0u64 >> (63 - eb)));
+    } else {
+        f(sw, !0u64 << sb);
+        for i in (sw + 1)..ew {
+            f(i, !0u64);
+        }
+        f(ew, !0u64 >> (63 - eb));
     }
 }
 

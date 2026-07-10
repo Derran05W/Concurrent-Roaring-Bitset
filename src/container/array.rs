@@ -56,10 +56,15 @@ impl ArrayContainer {
         runs
     }
 
-    // Consumed by P2 array<->bitmap conversion and P5 set-op kernels; unused within P1 alone.
-    #[allow(dead_code)]
     pub(crate) fn as_slice(&self) -> &[u16] {
         &self.values
+    }
+
+    /// Build directly from a Vec the caller guarantees is sorted and duplicate-free (the P5 set-op
+    /// kernels produce exactly such vecs). Avoids the O(n²) of repeated insert-at-index.
+    pub(crate) fn from_sorted_vec(values: Vec<u16>) -> Self {
+        debug_assert!(values.windows(2).all(|w| w[0] < w[1]));
+        Self { values }
     }
 }
 

@@ -17,7 +17,7 @@ implementation departed from the plan in any way.
 - [x] **P2** — `BitmapContainer` + array↔bitmap conversion
 - [x] **P3** — `RunContainer` + smallest-of-three `optimize`
 - [x] **P4** — `RoaringBitmap` top level + differential testing
-- [ ] **P5** — Set operations (`and` / `or`)
+- [x] **P5** — Set operations (`and` / `or`)
 - [ ] **P6** — Sequential baseline benchmarks (Baseline B recorded)
 - [ ] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
 - [ ] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
@@ -102,7 +102,14 @@ _Written reading of results (required by P8 exit): …_
 
 ## Deviations from Plan
 
-_None yet. Format: **P<n> · <date>** — what changed vs. CLAUDE.md, and why it was necessary._
+**P5 · 2026-07-09** — The plan's `setops_match_roaring_crate` test says to "optimize one of them
+to force Run participation." The intent is to exercise *our* Run kernels, so only our operand `a`
+is `optimize()`d; the reference operand is left as-is. This is necessary because the `roaring` 0.10
+crate has no run containers and exposes no run-optimize method (confirmed against the vendored
+source), so there is nothing to call on the reference — and it needs nothing: it is only the set
+oracle, and optimizing our side alone already forces every bitmap·run / run·run kernel path. (The
+P6 plan anticipates exactly this: "call the ref crate's run-optimize equivalent if it exposes one …
+if it doesn't, note that in the ledger.")
 
 ---
 
@@ -189,6 +196,26 @@ plan's prescribed logic requires (single-value-array construction for `insert`'s
 per-container half of `RoaringBitmap::assert_invariants`); both live in the container module where
 the leaf accessors are, keeping representation knowledge out of `bitmap.rs`.
 Next: P5
+
+### P5 — Set operations (`and` / `or`) (2026-07-09)
+Commit: <filled at commit>
+Done: Top-level `RoaringBitmap::and`/`or` (two-pointer merge-join over the sorted key vecs — `and`
+intersects shared keys and drops empty results; `or` carries single-side containers over cloned and
+kernel-merges shared keys) plus `BitAnd`/`BitOr`/`BitAndAssign`/`BitOrAssign` operator delegations.
+Container-level `and`/`or` dispatch with all six mirrored kernel pairs (array·array, array·bitmap,
+array·run, bitmap·bitmap, bitmap·run, run·run) per the pinned CRoaring algorithms; every kernel
+result passes through a private `normalize` enforcing §2.4 legality (bitmap ≤4096 → array; run with
+`4×num_runs > 8192` → bitmap). Added `pub(crate)` builders `ArrayContainer::from_sorted_vec`,
+`BitmapContainer::from_words`, `RunContainer::from_runs`, and a shared `for_range_words` word-mask
+helper for the bitmap·run kernels; dropped the now-obsolete `#[allow(dead_code)]` on the leaf
+accessors. Tests (`tests/differential.rs`): `setops_match_roaring_crate` (and/or vs the crate via
+the subset+equal-cardinality equality trick, our operand optimized to force Run kernels),
+`setops_algebraic` (∩⊆ operands, ∪⊇ operands, commutativity in cardinality), and an operator-form
+unit test; all results run `assert_invariants`.
+Measured: n/a
+Deviations: **P5 · 2026-07-09** — reference operand not run-optimized (roaring 0.10 has no run
+containers); see Deviations section.
+Next: P6
 
 ---
 

@@ -182,10 +182,14 @@ impl RunContainer {
         b
     }
 
-    // Consumed by P5 set-op kernels; unused within P3 alone.
-    #[allow(dead_code)]
     pub(crate) fn runs(&self) -> &[Run] {
         &self.runs
+    }
+
+    /// Build from precomputed runs + cardinality (the P5 kernels emit sorted, non-overlapping,
+    /// non-adjacent runs). Caller guarantees those invariants and that `cardinality = Σ(len+1)`.
+    pub(crate) fn from_runs(runs: Vec<Run>, cardinality: u32) -> Self {
+        Self { runs, cardinality }
     }
 }
 

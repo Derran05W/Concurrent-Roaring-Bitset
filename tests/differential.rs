@@ -25,6 +25,33 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
+/// A random set of `u32` values built with the same dense/sparse value mix as the op strategy.
+fn set_strategy() -> impl Strategy<Value = Vec<u32>> {
+    prop::collection::vec(value(), 0..2000)
+}
+
+#[test]
+fn operators_delegate_to_methods() {
+    let mut a = RoaringBitmap::new();
+    let mut b = RoaringBitmap::new();
+    for x in [1u32, 2, 3, 100, 70_000, 70_001] {
+        a.insert(x);
+    }
+    for x in [2u32, 3, 4, 70_001, 200_000] {
+        b.insert(x);
+    }
+    // Operator forms must agree with the named methods.
+    assert_eq!((&a & &b).len(), a.and(&b).len());
+    assert_eq!((&a | &b).len(), a.or(&b).len());
+
+    let mut c = a.clone();
+    c &= &b;
+    assert_eq!(c.len(), a.and(&b).len());
+    let mut d = a.clone();
+    d |= &b;
+    assert_eq!(d.len(), a.or(&b).len());
+}
+
 #[test]
 fn boundary_units() {
     let mut ours = RoaringBitmap::new();
@@ -110,5 +137,71 @@ proptest! {
         for x in [0u32, u32::MAX, 0xFFFF, 0x1_0000] {
             prop_assert_eq!(ours.contains(x), refb.contains(x));
         }
+    }
+
+    /// `and`/`or` against the reference crate. Our operand `a` is `optimize`d so the Run kernels
+    /// participate (the `roaring` 0.10 crate has no run containers / run-optimize, so the reference
+    /// is left as the plain oracle — see the P5 deviation note). Equality check per the plan's
+    /// pinned trick: equal cardinality + every reference element contained in ours ⟹ set equality.
+    #[test]
+    fn setops_match_roaring_crate(va in set_strategy(), vb in set_strategy()) {
+        let mut a = RoaringBitmap::new();
+        let mut ra = RefBitmap::new();
+        for &x in &va {
+            a.insert(x);
+            ra.insert(x);
+        }
+        let mut b = RoaringBitmap::new();
+        let mut rb = RefBitmap::new();
+        for &x in &vb {
+            b.insert(x);
+            rb.insert(x);
+        }
+        // Force Run participation on our operand (lossless; the reference stays a plain oracle).
+        a.optimize();
+
+        let ours_and = a.and(&b);
+        let ref_and = &ra & &rb;
+        prop_assert_eq!(ours_and.len(), ref_and.len(), "and cardinality mismatch");
+        for x in ref_and.iter() {
+            prop_assert!(ours_and.contains(x), "and: value {} missing from ours", x);
+        }
+        ours_and.assert_invariants();
+
+        let ours_or = a.or(&b);
+        let ref_or = &ra | &rb;
+        prop_assert_eq!(ours_or.len(), ref_or.len(), "or cardinality mismatch");
+        for x in ref_or.iter() {
+            prop_assert!(ours_or.contains(x), "or: value {} missing from ours", x);
+        }
+        ours_or.assert_invariants();
+    }
+
+    /// Algebraic laws on sampled probes: `a ∩ b ⊆ a` and `⊆ b`; `a ⊆ a ∪ b` and `b ⊆ a ∪ b`;
+    /// both ops commute in cardinality.
+    #[test]
+    fn setops_algebraic(va in set_strategy(), vb in set_strategy()) {
+        let mut a = RoaringBitmap::new();
+        for &x in &va {
+            a.insert(x);
+        }
+        let mut b = RoaringBitmap::new();
+        for &x in &vb {
+            b.insert(x);
+        }
+        let and_ab = a.and(&b);
+        let or_ab = a.or(&b);
+        for &x in va.iter().chain(vb.iter()) {
+            if and_ab.contains(x) {
+                prop_assert!(a.contains(x) && b.contains(x), "and superset violated at {}", x);
+            }
+            if a.contains(x) || b.contains(x) {
+                prop_assert!(or_ab.contains(x), "or subset violated at {}", x);
+            }
+        }
+        prop_assert_eq!(and_ab.len(), b.and(&a).len(), "and not commutative in len");
+        prop_assert_eq!(or_ab.len(), b.or(&a).len(), "or not commutative in len");
+        and_ab.assert_invariants();
+        or_ab.assert_invariants();
     }
 }

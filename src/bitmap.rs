@@ -1,6 +1,8 @@
 //! Top-level `RoaringBitmap` plus `split`/`join` value-model helpers and datasets.
 
 use crate::container::Container;
+use std::cmp::Ordering;
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 
 /// Split a `u32` into its container key (high 16 bits) and low part (low 16 bits).
 pub fn split(x: u32) -> (u16, u16) {
@@ -77,6 +79,59 @@ impl RoaringBitmap {
         }
     }
 
+    /// Set intersection. Two-pointer merge-join over the sorted key vecs: only keys present in
+    /// *both* operands can contribute, and disjoint containers yield empty results we must drop to
+    /// preserve the never-empty invariant.
+    pub fn and(&self, other: &Self) -> Self {
+        let (a, b) = (&self.containers, &other.containers);
+        let mut out: Vec<(u16, Container)> = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        while i < a.len() && j < b.len() {
+            match a[i].0.cmp(&b[j].0) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    let c = a[i].1.and(&b[j].1);
+                    if !c.is_empty() {
+                        out.push((a[i].0, c));
+                    }
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        RoaringBitmap { containers: out }
+    }
+
+    /// Set union. Two-pointer merge-join: keys in exactly one operand carry their container over
+    /// (cloned); keys in both merge via the container kernel. Merged containers are non-empty (union
+    /// of two non-empty sets), so no drop is needed.
+    pub fn or(&self, other: &Self) -> Self {
+        let (a, b) = (&self.containers, &other.containers);
+        let mut out: Vec<(u16, Container)> = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        while i < a.len() && j < b.len() {
+            match a[i].0.cmp(&b[j].0) {
+                Ordering::Less => {
+                    out.push(a[i].clone());
+                    i += 1;
+                }
+                Ordering::Greater => {
+                    out.push(b[j].clone());
+                    j += 1;
+                }
+                Ordering::Equal => {
+                    out.push((a[i].0, a[i].1.or(&b[j].1)));
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        out.extend_from_slice(&a[i..]);
+        out.extend_from_slice(&b[j..]);
+        RoaringBitmap { containers: out }
+    }
+
     /// Full §2.3/§2.5 invariant check for use from integration tests.
     #[doc(hidden)]
     pub fn assert_invariants(&self) {
@@ -89,6 +144,32 @@ impl RoaringBitmap {
             c.assert_invariants();
             prev_key = Some(*key);
         }
+    }
+}
+
+impl BitAnd<&RoaringBitmap> for &RoaringBitmap {
+    type Output = RoaringBitmap;
+    fn bitand(self, rhs: &RoaringBitmap) -> RoaringBitmap {
+        self.and(rhs)
+    }
+}
+
+impl BitOr<&RoaringBitmap> for &RoaringBitmap {
+    type Output = RoaringBitmap;
+    fn bitor(self, rhs: &RoaringBitmap) -> RoaringBitmap {
+        self.or(rhs)
+    }
+}
+
+impl BitAndAssign<&RoaringBitmap> for RoaringBitmap {
+    fn bitand_assign(&mut self, rhs: &RoaringBitmap) {
+        *self = self.and(rhs);
+    }
+}
+
+impl BitOrAssign<&RoaringBitmap> for RoaringBitmap {
+    fn bitor_assign(&mut self, rhs: &RoaringBitmap) {
+        *self = self.or(rhs);
     }
 }
 
