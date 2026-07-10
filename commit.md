@@ -365,7 +365,7 @@ Next: P8a
 ---
 
 ### P8a — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads) (2026-07-09)
-Commit: <filled by the follow-up hash-record commit>
+Commit: 1d0807d
 Done: `SnapshotRoaringBitmap` (`Box<[Shard]>` where each `Shard` = `arc_swap::ArcSwap<RoaringBitmap>`
 + per-shard writer `Mutex<()>`; power-of-two shards, default 64, `key & mask` low-bit sharding).
 Reads (`contains`/`len`/`is_empty`/`snapshot`) take no lock — they `ArcSwap::load` an immutable
