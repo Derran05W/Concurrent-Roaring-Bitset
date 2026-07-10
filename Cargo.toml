@@ -1,0 +1,16 @@
+[package]
+name = "concurrent_roaring"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1"
+roaring = "0.10"
+rand = "0.9"
+
+[[bench]]
+name = "sequential"
+harness = false
