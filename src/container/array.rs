@@ -60,7 +60,7 @@ impl ArrayContainer {
         &self.values
     }
 
-    /// Build directly from a Vec the caller guarantees is sorted and duplicate-free (the P5 set-op
+    /// Build directly from a Vec the caller guarantees is sorted and duplicate-free (the set-op
     /// kernels produce exactly such vecs). Avoids the O(n²) of repeated insert-at-index.
     pub(crate) fn from_sorted_vec(values: Vec<u16>) -> Self {
         debug_assert!(values.windows(2).all(|w| w[0] < w[1]));

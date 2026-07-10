@@ -140,9 +140,9 @@ proptest! {
     }
 
     /// `and`/`or` against the reference crate. Our operand `a` is `optimize`d so the Run kernels
-    /// participate (the `roaring` 0.10 crate has no run containers / run-optimize, so the reference
-    /// is left as the plain oracle — see the P5 deviation note). Equality check per the plan's
-    /// pinned trick: equal cardinality + every reference element contained in ours ⟹ set equality.
+    /// participate (the `roaring` 0.10 crate has no run containers / run-optimize, so the
+    /// reference is left as the plain oracle). Equality check: equal cardinality plus every
+    /// reference element contained in ours implies set equality.
     #[test]
     fn setops_match_roaring_crate(va in set_strategy(), vb in set_strategy()) {
         let mut a = RoaringBitmap::new();

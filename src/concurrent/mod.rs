@@ -1,4 +1,4 @@
-//! Concurrent Roaring bitmap variants: P7 sharded `RwLock`, P8 lock-free reads.
+//! Concurrent Roaring bitmap variants: a sharded `RwLock` type, and a lock-free-read type.
 
 pub mod sharded;
 pub mod snapshot;

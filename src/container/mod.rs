@@ -16,7 +16,7 @@ pub enum Container {
 }
 
 impl Container {
-    /// A fresh container holding exactly `v`. Every key starts life as an `ArrayContainer` (§2.4).
+    /// A fresh container holding exactly `v`. Every key starts life as an `ArrayContainer`.
     pub fn single(v: u16) -> Container {
         let mut a = ArrayContainer::new();
         a.insert(v);
@@ -28,7 +28,7 @@ impl Container {
             Container::Array(a) => {
                 // Pre-convert on the 4097th distinct value: 4096×2 B = 8192 B = bitmap size, so the
                 // array only wins strictly below 4096. Converting first avoids growing the Vec to
-                // 4097 then copying it (§2.4 row 1).
+                // 4097 then copying it.
                 if a.cardinality() == 4096 && !a.contains(v) {
                     let mut b = BitmapContainer::from_array(a);
                     let added = b.insert(v);
@@ -55,7 +55,7 @@ impl Container {
             Container::Bitmap(b) => {
                 let removed = b.remove(v);
                 // Crossing back to exactly 4096 means the array is now the smaller representation;
-                // `==` is correct because remove changes the count by exactly one (§2.4 row 2).
+                // `==` is correct because remove changes the count by exactly one.
                 if removed && b.cardinality() == 4096 {
                     *self = Container::Array(b.to_array());
                 }
@@ -72,7 +72,7 @@ impl Container {
         }
     }
 
-    /// A run list bigger than a bitmap has lost its reason to exist: `4 × num_runs > 8192` (§2.4).
+    /// A run list bigger than a bitmap has lost its reason to exist: `4 × num_runs > 8192`.
     fn demote_run_if_bloated(&mut self) {
         if let Container::Run(r) = self {
             if 4 * r.num_runs() > 8192 {
@@ -113,8 +113,8 @@ impl Container {
         }
     }
 
-    /// Smallest-of-three (§2.4): convert iff the smallest valid representation is *strictly*
-    /// smaller than the current one; ties keep the current representation (avoids thrashing).
+    /// Smallest-of-three: convert iff the smallest valid representation is *strictly* smaller
+    /// than the current one; ties keep the current representation (avoids thrashing).
     pub fn optimize(&mut self) {
         let card = self.cardinality();
         let num_runs = self.num_runs();
@@ -167,7 +167,7 @@ impl Container {
     }
 
     /// Intersection of two containers. The kernel picks the natural result representation; every
-    /// result passes through `normalize` so it obeys §2.4 representation legality.
+    /// result passes through `normalize` so the representation stays legal.
     pub(crate) fn and(&self, other: &Container) -> Container {
         normalize(match (self, other) {
             (Container::Array(a), Container::Array(b)) => and_array_array(a, b),
@@ -201,9 +201,9 @@ impl Container {
     }
 }
 
-/// Keep a kernel result representation legal per §2.4: a bitmap that dropped to the array threshold
-/// becomes an array; a run list that outgrew a bitmap becomes a bitmap. (This is legality only, not
-/// the smallest-of-three `optimize` — kernels never *shrink* below what the operation produced.)
+/// Keep a kernel result representation legal: a bitmap that dropped to the array threshold
+/// becomes an array; a run list that outgrew a bitmap becomes a bitmap. (Legality only, not the
+/// smallest-of-three `optimize` — kernels never *shrink* below what the operation produced.)
 fn normalize(c: Container) -> Container {
     match c {
         Container::Bitmap(b) if b.cardinality() <= 4096 => Container::Array(b.to_array()),
@@ -359,7 +359,7 @@ fn and_run_run(a: &RunContainer, b: &RunContainer) -> Container {
     let mut out: Vec<Run> = Vec::new();
     let (mut i, mut j) = (0, 0);
     while i < ra.len() && j < rb.len() {
-        // Boundary math in u32: start + len can reach 65535 (§P3 rule).
+        // Boundary math in u32: start + len can reach 65535.
         let a_start = ra[i].start as u32;
         let a_end = a_start + ra[i].len as u32;
         let b_start = rb[j].start as u32;
@@ -451,9 +451,9 @@ fn for_range_words(start: u32, end: u32, mut f: impl FnMut(usize, u64)) {
 }
 
 impl Container {
-    /// Assert this container's structural invariants (§2.3 table). Used by
-    /// `RoaringBitmap::assert_invariants` from integration tests; recomputes cached fields and
-    /// compares them against the stored caches.
+    /// Assert this container's structural invariants. Used by `RoaringBitmap::assert_invariants`
+    /// from integration tests; recomputes cached fields and compares them against the stored
+    /// caches.
     pub(crate) fn assert_invariants(&self) {
         match self {
             Container::Array(a) => {
@@ -486,7 +486,7 @@ impl Container {
                 let mut card: u32 = 0;
                 let mut prev_end: Option<u32> = None;
                 for run in r.runs() {
-                    // Boundary math in u32: start + len can reach 65535 (§P3 rule).
+                    // Boundary math in u32: start + len can reach 65535.
                     let start = run.start as u32;
                     let end = start + run.len as u32;
                     if let Some(pe) = prev_end {

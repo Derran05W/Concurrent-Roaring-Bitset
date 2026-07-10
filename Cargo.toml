@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Normal (not dev) dependency: the `datasets` module lives in library code (src/bitmap.rs per
-# §2.1) and the P7 `src/bin/scaling.rs` binary also consumes it — neither can see dev-deps.
+# Normal (not dev) dependency: the `datasets` module lives in library code and the scaling
+# binary also consumes it — neither can see dev-deps.
 rand = "0.9"
-# Why parking_lot over std::sync: no lock poisoning (no `.unwrap()` on every access) and a faster
-# uncontended path — exactly what the P7 concurrency-tax measurement stresses.
+# parking_lot over std::sync: no lock poisoning (no `.unwrap()` on every access) and a faster
+# uncontended path.
 parking_lot = "0.12"
-# P8a: lock-free read path — readers load an immutable snapshot pointer via `ArcSwap` with no lock.
+# Lock-free read path: readers load an immutable snapshot pointer via `ArcSwap` with no lock.
 arc-swap = "1"
 
 [dev-dependencies]
@@ -19,8 +19,8 @@ proptest = "1"
 roaring = "0.10"
 
 # Fat LTO + one codegen unit: lets the hot container/bitmap paths inline across crate boundaries
-# into the bench and scaling binaries. Applies equally to ours and the `roaring` reference (same
-# binary), so Baseline-B comparisons stay fair; build-time cost is irrelevant at this crate size.
+# into the bench and scaling binaries. Applies equally to ours and the `roaring` reference in the
+# same binary, so the comparison stays fair; build-time cost is irrelevant at this crate size.
 [profile.release]
 lto = "fat"
 codegen-units = 1

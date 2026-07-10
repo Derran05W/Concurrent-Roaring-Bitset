@@ -1,16 +1,16 @@
-//! P8a: `SnapshotRoaringBitmap` — lock-free reads via `arc-swap` (Wave 2). Each shard holds an
-//! immutable `RoaringBitmap` behind an `ArcSwap`; readers load the current pointer with no lock,
-//! writers serialize on a per-shard mutex and publish a mutated clone (single-writer RCU). The
-//! clone-per-write cost is the deliberate tradeoff being measured (a read-optimized structure).
+//! `SnapshotRoaringBitmap`: lock-free reads via `arc-swap`. Each shard holds an immutable
+//! `RoaringBitmap` behind an `ArcSwap`; readers load the current pointer with no lock, writers
+//! serialize on a per-shard mutex and publish a mutated clone (single-writer RCU). The
+//! clone-per-write cost is the deliberate tradeoff of a read-optimized structure.
 
 use crate::bitmap::{split, RoaringBitmap};
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-// One shard per 128-byte cache line (Apple Silicon's line size, and ≥ x86's 64 B adjacent-line
-// prefetch pair). Unpadded, eight 16-byte shards share one line, so a writer's pointer `store`
-// into one shard invalidates the line under readers of seven unrelated shards.
+// 128-byte alignment gives each shard its own cache line (Apple Silicon's line size, and ≥ x86's
+// 64 B adjacent-line prefetch pair). Unpadded, several shards would share a line, so a writer's
+// pointer store would invalidate it under readers of unrelated shards.
 #[repr(align(128))]
 struct Shard {
     current: ArcSwap<RoaringBitmap>,
@@ -23,7 +23,7 @@ struct Shard {
 
 pub struct SnapshotRoaringBitmap {
     shards: Box<[Shard]>,
-    mask: usize, // num_shards - 1; num_shards is a power of two (§2.6), so this masks the key.
+    mask: usize, // num_shards - 1; num_shards is a power of two, so this masks the key.
 }
 
 impl Default for SnapshotRoaringBitmap {
@@ -34,12 +34,12 @@ impl Default for SnapshotRoaringBitmap {
 
 impl SnapshotRoaringBitmap {
     pub fn new() -> Self {
-        // 64 shards: the §2.6 default.
+        // 64 shards by default.
         Self::with_shard_count(64)
     }
 
     pub fn with_shard_count(n: usize) -> Self {
-        // Power of two so `key & mask` is a valid uniform shard index (§2.6).
+        // Power of two so `key & mask` is a valid uniform shard index.
         assert!(n.is_power_of_two(), "shard count must be a power of two");
         let shards = (0..n)
             .map(|_| Shard {
@@ -55,9 +55,8 @@ impl SnapshotRoaringBitmap {
     }
 
     fn shard(&self, key: u16) -> &Shard {
-        // Low bits of the key: real-world integer sets are typically clustered, so consecutive keys
-        // must round-robin across shards; taking *high* bits would pile a clustered dataset into
-        // shard 0 (§2.6).
+        // Low bits of the key: real-world integer sets are typically clustered, so consecutive
+        // keys round-robin across shards; high bits would pile a clustered dataset into shard 0.
         &self.shards[(key as usize) & self.mask]
     }
 
@@ -101,19 +100,19 @@ impl SnapshotRoaringBitmap {
 
     pub fn len(&self) -> u64 {
         // Load each shard's snapshot independently — per-shard-atomic, not linearizable across
-        // shards: a concurrent writer to an already-counted shard is not reflected (§2.6).
+        // shards: a concurrent writer to an already-counted shard is not reflected.
         self.shards.iter().map(|s| s.current.load().len()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
-        // Same per-shard-atomic discipline as `len` (§2.6).
+        // Same per-shard-atomic discipline as `len`.
         self.shards.iter().all(|s| s.current.load().is_empty())
     }
 
     pub fn snapshot(&self) -> RoaringBitmap {
         // Load each shard's immutable `Arc` — no locks at all. Shards partition the key space by
         // `key & mask`, so the clones are key-disjoint and reassemble by plain concatenation + sort
-        // (`RoaringBitmap::from_shards`). Per-shard-atomic, not a single global image (§2.6).
+        // (`RoaringBitmap::from_shards`). Per-shard-atomic, not a single global image.
         RoaringBitmap::from_shards(self.shards.iter().map(|s| (*s.current.load_full()).clone()))
     }
 

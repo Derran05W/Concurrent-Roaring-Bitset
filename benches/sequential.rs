@@ -1,6 +1,6 @@
-//! Sequential baseline benchmarks (Baseline B: ours vs the `roaring` crate; also the sequential
-//! reference point for Baseline A in P7). Every group measures our `RoaringBitmap` and the
-//! reference `roaring::RoaringBitmap` side by side on identical, pinned-seed inputs.
+//! Sequential baseline benchmarks: ours vs the `roaring` crate. Every group measures our
+//! `RoaringBitmap` and the reference `roaring::RoaringBitmap` side by side on identical,
+//! pinned-seed inputs.
 
 use concurrent_roaring::bitmap::datasets;
 use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
@@ -41,8 +41,7 @@ fn bench_build(c: &mut Criterion) {
 }
 
 /// contains/{dense,sparse,clustered}: pre-built structure, optimize()d on our side (the `roaring`
-/// 0.10 crate exposes no run-optimize equivalent — see the P6 ledger note), then iterate the probe
-/// stream.
+/// 0.10 crate exposes no run-optimize equivalent), then iterate the probe stream.
 fn bench_contains(c: &mut Criterion) {
     for (name, data) in [
         ("dense", datasets::dense()),
@@ -80,8 +79,8 @@ fn bench_remove(c: &mut Criterion) {
     let ours = build_ours(&data);
     let refb = build_ref(&data);
 
-    // Pinned seed for the remove sample (§ appendix seed table): 0xBADC0DE, regrouped to 4-digit
-    // blocks for clippy::unusual_byte_groupings (same value).
+    // Pinned seed for the remove sample: 0x0BAD_C0DE == 0xBADC0DE, grouped in 4-digit blocks for
+    // clippy::unusual_byte_groupings.
     let mut rng = StdRng::seed_from_u64(0x0BAD_C0DE);
     let victims: Vec<u32> = (0..100_000)
         .map(|_| data[rng.random_range(0..data.len())])
@@ -115,8 +114,8 @@ fn bench_remove(c: &mut Criterion) {
     g.finish();
 }
 
-/// and/or over the three prescribed dataset pairs; both operands pre-built and (on our side)
-/// optimized so Run kernels participate.
+/// and/or over three dataset pairs; both operands pre-built and (on our side) optimized so Run
+/// kernels participate.
 fn bench_setops(c: &mut Criterion) {
     let dense = datasets::dense();
     let sparse = datasets::sparse();
@@ -148,10 +147,10 @@ fn bench_setops(c: &mut Criterion) {
     }
 }
 
-/// Bench-local abstraction over the two structures (§1.4 permits a trait inside a bench file). Only
-/// the build path needs normalizing: `RoaringBitmap::insert` takes `&mut self` while
-/// `ConcurrentRoaringBitmap::insert` takes `&self`. The contains benches call each type's inherent
-/// method directly, so `contains` is not part of the trait.
+/// Bench-local abstraction over the two structures. Only the build path needs normalizing:
+/// `RoaringBitmap::insert` takes `&mut self` while `ConcurrentRoaringBitmap::insert` takes
+/// `&self`. The contains benches call each type's inherent method directly, so `contains` is not
+/// part of the trait.
 trait TaxBench: Default {
     fn insert(&mut self, x: u32) -> bool;
 }
@@ -184,9 +183,9 @@ fn build_tax<T: TaxBench>(data: &[u32]) -> T {
     b
 }
 
-/// Baseline A (concurrency tax): sequential `RoaringBitmap` vs each concurrent type run
-/// single-threaded on clustered build + contains. The gap is the cost of the sharding/locking/RCU
-/// machinery when there is no contention.
+/// Concurrency tax: sequential `RoaringBitmap` vs each concurrent type run single-threaded on
+/// clustered build + contains. The gap is the cost of the sharding/locking/RCU machinery when
+/// there is no contention.
 fn bench_tax(c: &mut Criterion) {
     let data = datasets::clustered();
     let probes = datasets::probes(&data);

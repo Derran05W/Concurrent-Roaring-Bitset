@@ -12,7 +12,7 @@ pub struct Run {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunContainer {
     runs: Vec<Run>,
-    // Cached because Σ(len+1) is O(runs); the O(1)-cardinality convention (§2.3) demands it.
+    // Cached because Σ(len+1) is O(runs), and cardinality() must stay O(1).
     cardinality: u32,
 }
 
@@ -28,7 +28,7 @@ impl RunContainer {
             return false;
         }
         let run = self.runs[idx - 1];
-        // Boundary math in u32: start+len can reach 65535 (§P3 rule).
+        // Boundary math in u32: start+len can reach 65535.
         v as u32 <= run.start as u32 + run.len as u32
     }
 
@@ -186,7 +186,7 @@ impl RunContainer {
         &self.runs
     }
 
-    /// Build from precomputed runs + cardinality (the P5 kernels emit sorted, non-overlapping,
+    /// Build from precomputed runs + cardinality (the set-op kernels emit sorted, non-overlapping,
     /// non-adjacent runs). Caller guarantees those invariants and that `cardinality = Σ(len+1)`.
     pub(crate) fn from_runs(runs: Vec<Run>, cardinality: u32) -> Self {
         Self { runs, cardinality }

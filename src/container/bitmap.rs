@@ -4,8 +4,8 @@ use super::array::ArrayContainer;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BitmapContainer {
-    words: Box<[u64; 1024]>, // boxed so a `Container` stays pointer-sized rather than inline 8 KiB (§2.3)
-    cardinality: u32,        // u32: a full container holds 65536 values > u16::MAX (§2.3)
+    words: Box<[u64; 1024]>, // boxed so a `Container` stays pointer-sized rather than inline 8 KiB
+    cardinality: u32,        // u32: a full container holds 65536 values > u16::MAX
 }
 
 impl BitmapContainer {
@@ -96,8 +96,8 @@ impl BitmapContainer {
         &self.words
     }
 
-    /// Build from precomputed words + cardinality (the P5 kernels compute both directly). Caller
-    /// guarantees `cardinality` equals the popcount of `words`.
+    /// Build from precomputed words + cardinality (the set-op kernels compute both directly).
+    /// Caller guarantees `cardinality` equals the popcount of `words`.
     pub(crate) fn from_words(words: Box<[u64; 1024]>, cardinality: u32) -> Self {
         debug_assert_eq!(
             cardinality,

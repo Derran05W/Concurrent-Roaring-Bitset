@@ -1,7 +1,7 @@
-//! Concurrent stress tests for the P7/P8 concurrent types. `loom` is out of scope (§0.3); the risk
-//! is covered by the simplicity of each lock/RCU pattern plus these two stress patterns. Both
-//! patterns are stamped against every concurrent type by the `stress_suite!` macro so the bodies
-//! are written once rather than triplicated.
+//! Concurrent stress tests for each concurrent type. `loom` model checking is out of scope; the
+//! risk is covered by the simplicity of each lock/RCU pattern plus these two stress patterns.
+//! Both patterns are stamped against every concurrent type by the `stress_suite!` macro so the
+//! bodies are written once rather than triplicated.
 
 use concurrent_roaring::bitmap::datasets;
 use concurrent_roaring::{ConcurrentRoaringBitmap, SnapshotRoaringBitmap};

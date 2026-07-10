@@ -14,9 +14,9 @@ pub fn join(key: u16, low: u16) -> u32 {
     ((key as u32) << 16) | low as u32
 }
 
-/// Deterministic benchmark datasets, shared by the criterion bench, the P7 scaling binary, and
-/// tests. `#[doc(hidden) pub]` so benches (which cannot import from `tests/`) can reach them while
-/// they stay out of the public API surface. Seeds are pinned so every phase measures the same data.
+/// Deterministic benchmark datasets, shared by the criterion bench, the scaling binary, and tests.
+/// `#[doc(hidden) pub]` so benches (which cannot import from `tests/`) can reach them while they
+/// stay out of the public API surface. Seeds are pinned so every run measures the same data.
 #[doc(hidden)]
 pub mod datasets {
     use rand::rngs::StdRng;
@@ -37,7 +37,7 @@ pub mod datasets {
 
     /// 1,000 random bases, each contributing a length-1000 contiguous span → run/array mixture.
     pub fn clustered() -> Vec<u32> {
-        // 0xC0FFEE regrouped to 4-digit blocks for clippy::unusual_byte_groupings (same value).
+        // 0x00C0_FFEE == 0xC0FFEE, grouped in 4-digit blocks for clippy::unusual_byte_groupings.
         let mut rng = StdRng::seed_from_u64(0x00C0_FFEE);
         let mut out = Vec::with_capacity(1_000_000);
         for _ in 0..1_000 {
@@ -67,11 +67,10 @@ pub mod datasets {
 
 #[derive(Clone, Default)]
 pub struct RoaringBitmap {
-    // Parallel vecs (keys[i] owns containers[i]), sorted by key, keys unique — a recorded deviation
-    // from §2.5's Vec<(u16, Container)>: key binary searches walk a dense 2-byte-stride vec
-    // (≤128 KiB even with every key present, cache-resident) instead of striding 48-byte tuples,
-    // and a new-key insert shifts 42 B per entry instead of 48. Semantics are identical, and
-    // sharding still partitions this shape by key (P7).
+    // Parallel vecs (keys[i] owns containers[i]), sorted by key, keys unique. Key binary searches
+    // walk a dense 2-byte-stride vec (≤128 KiB even with every key present, cache-resident)
+    // instead of striding 48-byte tuples, and a new-key insert shifts 42 B per entry instead of
+    // 48. Sharding partitions this same shape by key.
     keys: Vec<u16>,
     containers: Vec<Container>,
 }
@@ -119,7 +118,7 @@ impl RoaringBitmap {
 
     pub fn len(&self) -> u64 {
         // No cached global count: a single counter would become the cross-shard contention point
-        // in every concurrent variant (P7/P8). Summing per-container O(1) cardinalities is cheap.
+        // in every concurrent variant. Summing per-container O(1) cardinalities is cheap.
         self.containers.iter().map(|c| c.cardinality() as u64).sum()
     }
 
@@ -197,10 +196,10 @@ impl RoaringBitmap {
         RoaringBitmap { keys, containers }
     }
 
-    /// Reassemble a whole map from per-shard clones (P7/P8 `snapshot`). Shards partition the key
-    /// space disjointly by `key & mask`, so each shard's containers are key-disjoint from every
-    /// other's — concatenating them and re-sorting by key reconstructs the map with no kernel merge.
-    /// `pub(crate)` so the private fields stay encapsulated.
+    /// Reassemble a whole map from per-shard clones, used by each concurrent type's `snapshot`.
+    /// Shards partition the key space disjointly by `key & mask`, so each shard's containers are
+    /// key-disjoint from every other's — concatenating them and re-sorting by key reconstructs the
+    /// map with no kernel merge. `pub(crate)` so the private fields stay encapsulated.
     pub(crate) fn from_shards(shards: impl IntoIterator<Item = RoaringBitmap>) -> Self {
         let mut pairs: Vec<(u16, Container)> = Vec::new();
         for shard in shards {
@@ -211,7 +210,8 @@ impl RoaringBitmap {
         RoaringBitmap { keys, containers }
     }
 
-    /// Full §2.3/§2.5 invariant check for use from integration tests.
+    /// Full structural invariant check (sorted/unique keys, no empty containers, per-container
+    /// invariants) for use from integration tests.
     #[doc(hidden)]
     pub fn assert_invariants(&self) {
         assert_eq!(

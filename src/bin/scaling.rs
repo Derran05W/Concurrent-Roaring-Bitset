@@ -1,7 +1,6 @@
-//! P7 multithread scaling harness. For each (structure, workload, thread-count) cell it pre-populates
+//! Multithread scaling harness. For each (structure, workload, thread-count) cell it pre-populates
 //! a fresh structure with the clustered dataset, releases N threads from a barrier to each run a
-//! fixed op count under the workload's read/write mix, and records wall-clock throughput. Extended in
-//! P8 to register the lock-free structures.
+//! fixed op count under the workload's read/write mix, and records wall-clock throughput.
 
 use concurrent_roaring::bitmap::datasets;
 use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap, SnapshotRoaringBitmap};
@@ -17,7 +16,7 @@ use std::time::Instant;
 
 /// Ops each thread performs in a timed cell.
 const OPS: usize = 2_000_000;
-/// Per-thread RNG seed base (§ appendix seed table), XORed with the thread index.
+/// Per-thread RNG seed base, XORed with the thread index.
 const SEED_BASE: u64 = 0x5CA1_AB1E;
 
 /// A structure exposing the two hot-path ops the workloads drive, both through `&self` so many
@@ -158,7 +157,7 @@ fn main() {
     let max_threads = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    // {1,2,4,8,16} clamped to the machine's parallelism (§ P7 protocol).
+    // {1,2,4,8,16} clamped to the machine's parallelism.
     let thread_counts: Vec<usize> = [1, 2, 4, 8, 16]
         .into_iter()
         .filter(|&n| n <= max_threads)
