@@ -5,8 +5,15 @@
 use crate::bitmap::{split, RoaringBitmap};
 use parking_lot::RwLock;
 
+// One shard per 128-byte cache line (Apple Silicon's line size, and ≥ x86's 64 B adjacent-line
+// prefetch pair). Unpadded, four 32-byte shards share one line, and even a *reader* RMWs its
+// lock word to register itself — so readers of neighbouring shards false-share and the
+// read-heavy scaling runs stall on line bouncing that has nothing to do with real contention.
+#[repr(align(128))]
+struct Shard(RwLock<RoaringBitmap>);
+
 pub struct ConcurrentRoaringBitmap {
-    shards: Box<[RwLock<RoaringBitmap>]>,
+    shards: Box<[Shard]>,
     mask: usize, // num_shards - 1; num_shards is a power of two (§2.6), so this masks the key.
 }
 
@@ -26,7 +33,7 @@ impl ConcurrentRoaringBitmap {
         // Power of two so `key & mask` is a valid uniform shard index (§2.6).
         assert!(n.is_power_of_two(), "shard count must be a power of two");
         let shards = (0..n)
-            .map(|_| RwLock::new(RoaringBitmap::new()))
+            .map(|_| Shard(RwLock::new(RoaringBitmap::new())))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Self {
@@ -39,7 +46,7 @@ impl ConcurrentRoaringBitmap {
         // Low bits of the key: real-world integer sets are typically clustered, so consecutive keys
         // must round-robin across shards; taking *high* bits would pile a clustered dataset into
         // shard 0 (§2.6).
-        &self.shards[(key as usize) & self.mask]
+        &self.shards[(key as usize) & self.mask].0
     }
 
     pub fn insert(&self, x: u32) -> bool {
@@ -62,12 +69,12 @@ impl ConcurrentRoaringBitmap {
         // Read-lock one shard at a time; never hold all locks at once. Consequence: this is
         // per-shard-atomic, not linearizable across shards — a concurrent writer to an
         // already-counted shard is not reflected (documented §2.6 semantic).
-        self.shards.iter().map(|s| s.read().len()).sum()
+        self.shards.iter().map(|s| s.0.read().len()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
         // Same one-at-a-time discipline as `len`: per-shard-atomic, not globally linearizable.
-        self.shards.iter().all(|s| s.read().is_empty())
+        self.shards.iter().all(|s| s.0.read().is_empty())
     }
 
     pub fn snapshot(&self) -> RoaringBitmap {
@@ -75,7 +82,7 @@ impl ConcurrentRoaringBitmap {
         // partition the key space by `key & mask`, so the clones are key-disjoint and merge by plain
         // concatenation + sort (see `RoaringBitmap::from_shards`) — no kernel merge. Per-shard-atomic,
         // not a single global point-in-time image (§2.6).
-        let clones = self.shards.iter().map(|s| s.read().clone());
+        let clones = self.shards.iter().map(|s| s.0.read().clone());
         RoaringBitmap::from_shards(clones.collect::<Vec<_>>())
     }
 
@@ -92,7 +99,7 @@ impl ConcurrentRoaringBitmap {
 
     pub fn optimize(&self) {
         for s in self.shards.iter() {
-            s.write().optimize();
+            s.0.write().optimize();
         }
     }
 }

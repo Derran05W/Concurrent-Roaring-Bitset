@@ -8,6 +8,10 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+// One shard per 128-byte cache line (Apple Silicon's line size, and ≥ x86's 64 B adjacent-line
+// prefetch pair). Unpadded, eight 16-byte shards share one line, so a writer's pointer `store`
+// into one shard invalidates the line under readers of seven unrelated shards.
+#[repr(align(128))]
 struct Shard {
     current: ArcSwap<RoaringBitmap>,
     // Single-writer RCU serialization: two concurrent read-copy-update writers on one shard would

@@ -67,8 +67,13 @@ pub mod datasets {
 
 #[derive(Clone, Default)]
 pub struct RoaringBitmap {
-    // Sorted by key, keys unique. This exact shape is what P7 shards (partition by key).
-    containers: Vec<(u16, Container)>,
+    // Parallel vecs (keys[i] owns containers[i]), sorted by key, keys unique — a recorded deviation
+    // from §2.5's Vec<(u16, Container)>: key binary searches walk a dense 2-byte-stride vec
+    // (≤128 KiB even with every key present, cache-resident) instead of striding 48-byte tuples,
+    // and a new-key insert shifts 42 B per entry instead of 48. Semantics are identical, and
+    // sharding still partitions this shape by key (P7).
+    keys: Vec<u16>,
+    containers: Vec<Container>,
 }
 
 impl RoaringBitmap {
@@ -78,10 +83,11 @@ impl RoaringBitmap {
 
     pub fn insert(&mut self, x: u32) -> bool {
         let (key, low) = split(x);
-        match self.containers.binary_search_by_key(&key, |(k, _)| *k) {
-            Ok(i) => self.containers[i].1.insert(low),
+        match self.keys.binary_search(&key) {
+            Ok(i) => self.containers[i].insert(low),
             Err(i) => {
-                self.containers.insert(i, (key, Container::single(low)));
+                self.keys.insert(i, key);
+                self.containers.insert(i, Container::single(low));
                 true
             }
         }
@@ -89,12 +95,13 @@ impl RoaringBitmap {
 
     pub fn remove(&mut self, x: u32) -> bool {
         let (key, low) = split(x);
-        match self.containers.binary_search_by_key(&key, |(k, _)| *k) {
+        match self.keys.binary_search(&key) {
             Err(_) => false,
             Ok(i) => {
-                let removed = self.containers[i].1.remove(low);
+                let removed = self.containers[i].remove(low);
                 // "Never empty" invariant: drop the entry once its last value is gone.
-                if removed && self.containers[i].1.is_empty() {
+                if removed && self.containers[i].is_empty() {
+                    self.keys.remove(i);
                     self.containers.remove(i);
                 }
                 removed
@@ -104,8 +111,8 @@ impl RoaringBitmap {
 
     pub fn contains(&self, x: u32) -> bool {
         let (key, low) = split(x);
-        match self.containers.binary_search_by_key(&key, |(k, _)| *k) {
-            Ok(i) => self.containers[i].1.contains(low),
+        match self.keys.binary_search(&key) {
+            Ok(i) => self.containers[i].contains(low),
             Err(_) => false,
         }
     }
@@ -113,19 +120,16 @@ impl RoaringBitmap {
     pub fn len(&self) -> u64 {
         // No cached global count: a single counter would become the cross-shard contention point
         // in every concurrent variant (P7/P8). Summing per-container O(1) cardinalities is cheap.
-        self.containers
-            .iter()
-            .map(|(_, c)| c.cardinality() as u64)
-            .sum()
+        self.containers.iter().map(|c| c.cardinality() as u64).sum()
     }
 
     pub fn is_empty(&self) -> bool {
         // Valid because containers are never stored empty (the remove path drops them).
-        self.containers.is_empty()
+        self.keys.is_empty()
     }
 
     pub fn optimize(&mut self) {
-        for (_, c) in &mut self.containers {
+        for c in &mut self.containers {
             c.optimize();
         }
     }
@@ -134,79 +138,93 @@ impl RoaringBitmap {
     /// *both* operands can contribute, and disjoint containers yield empty results we must drop to
     /// preserve the never-empty invariant.
     pub fn and(&self, other: &Self) -> Self {
-        let (a, b) = (&self.containers, &other.containers);
-        let mut out: Vec<(u16, Container)> = Vec::new();
+        // Result keys ⊆ the smaller operand's keys: presizing makes every push realloc-free.
+        let cap = self.keys.len().min(other.keys.len());
+        let mut keys = Vec::with_capacity(cap);
+        let mut containers = Vec::with_capacity(cap);
         let (mut i, mut j) = (0, 0);
-        while i < a.len() && j < b.len() {
-            match a[i].0.cmp(&b[j].0) {
+        while i < self.keys.len() && j < other.keys.len() {
+            match self.keys[i].cmp(&other.keys[j]) {
                 Ordering::Less => i += 1,
                 Ordering::Greater => j += 1,
                 Ordering::Equal => {
-                    let c = a[i].1.and(&b[j].1);
+                    let c = self.containers[i].and(&other.containers[j]);
                     if !c.is_empty() {
-                        out.push((a[i].0, c));
+                        keys.push(self.keys[i]);
+                        containers.push(c);
                     }
                     i += 1;
                     j += 1;
                 }
             }
         }
-        RoaringBitmap { containers: out }
+        RoaringBitmap { keys, containers }
     }
 
     /// Set union. Two-pointer merge-join: keys in exactly one operand carry their container over
     /// (cloned); keys in both merge via the container kernel. Merged containers are non-empty (union
     /// of two non-empty sets), so no drop is needed.
     pub fn or(&self, other: &Self) -> Self {
-        let (a, b) = (&self.containers, &other.containers);
-        let mut out: Vec<(u16, Container)> = Vec::new();
+        // Worst case (disjoint key sets) the union carries every container from both sides.
+        let cap = self.keys.len() + other.keys.len();
+        let mut keys = Vec::with_capacity(cap);
+        let mut containers = Vec::with_capacity(cap);
         let (mut i, mut j) = (0, 0);
-        while i < a.len() && j < b.len() {
-            match a[i].0.cmp(&b[j].0) {
+        while i < self.keys.len() && j < other.keys.len() {
+            match self.keys[i].cmp(&other.keys[j]) {
                 Ordering::Less => {
-                    out.push(a[i].clone());
+                    keys.push(self.keys[i]);
+                    containers.push(self.containers[i].clone());
                     i += 1;
                 }
                 Ordering::Greater => {
-                    out.push(b[j].clone());
+                    keys.push(other.keys[j]);
+                    containers.push(other.containers[j].clone());
                     j += 1;
                 }
                 Ordering::Equal => {
-                    out.push((a[i].0, a[i].1.or(&b[j].1)));
+                    keys.push(self.keys[i]);
+                    containers.push(self.containers[i].or(&other.containers[j]));
                     i += 1;
                     j += 1;
                 }
             }
         }
-        out.extend_from_slice(&a[i..]);
-        out.extend_from_slice(&b[j..]);
-        RoaringBitmap { containers: out }
+        keys.extend_from_slice(&self.keys[i..]);
+        containers.extend_from_slice(&self.containers[i..]);
+        keys.extend_from_slice(&other.keys[j..]);
+        containers.extend_from_slice(&other.containers[j..]);
+        RoaringBitmap { keys, containers }
     }
 
     /// Reassemble a whole map from per-shard clones (P7/P8 `snapshot`). Shards partition the key
     /// space disjointly by `key & mask`, so each shard's containers are key-disjoint from every
     /// other's — concatenating them and re-sorting by key reconstructs the map with no kernel merge.
-    /// `pub(crate)` so the private `containers` field stays encapsulated.
+    /// `pub(crate)` so the private fields stay encapsulated.
     pub(crate) fn from_shards(shards: impl IntoIterator<Item = RoaringBitmap>) -> Self {
-        let mut containers: Vec<(u16, Container)> = Vec::new();
+        let mut pairs: Vec<(u16, Container)> = Vec::new();
         for shard in shards {
-            containers.extend(shard.containers);
+            pairs.extend(shard.keys.into_iter().zip(shard.containers));
         }
-        containers.sort_by_key(|(k, _)| *k);
-        RoaringBitmap { containers }
+        pairs.sort_by_key(|(k, _)| *k);
+        let (keys, containers) = pairs.into_iter().unzip();
+        RoaringBitmap { keys, containers }
     }
 
     /// Full §2.3/§2.5 invariant check for use from integration tests.
     #[doc(hidden)]
     pub fn assert_invariants(&self) {
-        let mut prev_key: Option<u16> = None;
-        for (key, c) in &self.containers {
-            if let Some(pk) = prev_key {
-                assert!(*key > pk, "container keys not sorted and unique");
-            }
+        assert_eq!(
+            self.keys.len(),
+            self.containers.len(),
+            "keys/containers length mismatch"
+        );
+        for w in self.keys.windows(2) {
+            assert!(w[0] < w[1], "container keys not sorted and unique");
+        }
+        for c in &self.containers {
             assert!(!c.is_empty(), "stored container is empty");
             c.assert_invariants();
-            prev_key = Some(*key);
         }
     }
 }

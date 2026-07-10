@@ -18,6 +18,13 @@ criterion = "0.5"
 proptest = "1"
 roaring = "0.10"
 
+# Fat LTO + one codegen unit: lets the hot container/bitmap paths inline across crate boundaries
+# into the bench and scaling binaries. Applies equally to ours and the `roaring` reference (same
+# binary), so Baseline-B comparisons stay fair; build-time cost is irrelevant at this crate size.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 [[bench]]
 name = "sequential"
 harness = false

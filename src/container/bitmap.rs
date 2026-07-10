@@ -29,16 +29,17 @@ impl BitmapContainer {
     pub fn to_array(&self) -> ArrayContainer {
         // Only legal below the array threshold; caller (Container::remove) checks the count.
         debug_assert!(self.cardinality <= 4096);
-        let mut a = ArrayContainer::new();
+        let mut out = Vec::with_capacity(self.cardinality as usize);
         for (word_idx, &word) in self.words.iter().enumerate() {
             let mut w = word;
             while w != 0 {
                 let bit = w.trailing_zeros();
-                a.insert((word_idx as u16) * 64 + bit as u16);
+                out.push((word_idx as u16) * 64 + bit as u16);
                 w &= w - 1; // clear the lowest set bit
             }
         }
-        a
+        // Pushed in ascending word/bit order, so the vec is sorted by construction.
+        ArrayContainer::from_sorted_vec(out)
     }
 
     pub fn contains(&self, v: u16) -> bool {
