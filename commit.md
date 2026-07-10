@@ -15,7 +15,7 @@ implementation departed from the plan in any way.
 - [x] **P0** — Repository scaffold & harness
 - [x] **P1** — `ArrayContainer` + `Container` enum
 - [x] **P2** — `BitmapContainer` + array↔bitmap conversion
-- [ ] **P3** — `RunContainer` + smallest-of-three `optimize`
+- [x] **P3** — `RunContainer` + smallest-of-three `optimize`
 - [ ] **P4** — `RoaringBitmap` top level + differential testing
 - [ ] **P5** — Set operations (`and` / `or`)
 - [ ] **P6** — Sequential baseline benchmarks (Baseline B recorded)
@@ -155,6 +155,21 @@ word-boundary units (incl. the −1 correction), and threshold-through-`Containe
 Measured: n/a
 Deviations: none
 Next: P3
+
+### P3 — `RunContainer` + smallest-of-three `optimize` (2026-07-09)
+Commit: <pending>
+Done: `RunContainer` (`Vec<Run>` + cached `u32` cardinality; `Run{start,len}`, len=count−1) with
+`contains`/`insert` (extend/merge/isolated) / `remove` (shrink/split) / `cardinality`/`is_empty`/
+`num_runs`/`from_array`/`from_bitmap`/`to_array`/`to_bitmap` and `pub(crate) runs()`; all boundary
+math in `u32`. `Container` gained the `Run` variant + dispatch; run-arm mutations demote to Bitmap
+when `4×num_runs > 8192` (`demote_run_if_bloated`); `Container::optimize` implements the strict
+smallest-of-three (ties keep current) via a private `Repr` target enum. Tests: tri-representation
+agreement + round-trips, run mutation vs `BTreeSet` with invariant checks (sorted/non-overlapping/
+non-adjacent/cached-card), `optimize` shrink+idempotent proptest, and unit tests exercising both
+insert- and remove-driven run→bitmap demotion.
+Measured: n/a
+Deviations: none
+Next: P4
 
 ---
 
