@@ -41,7 +41,6 @@ impl RunContainer {
                 return false; // already inside a run
             }
             if v as u32 == prev_end + 1 {
-                // Extend the previous run to cover v.
                 self.runs[idx - 1].len += 1;
                 // If v now bridges to the next run, absorb it (keeps runs non-adjacent).
                 if idx < self.runs.len() && self.runs[idx].start as u32 == v as u32 + 1 {
@@ -55,7 +54,6 @@ impl RunContainer {
                 return true;
             }
         }
-        // Not adjacent below; check adjacency to the run starting just above v.
         if idx < self.runs.len() && v as u32 + 1 == self.runs[idx].start as u32 {
             self.runs[idx].start -= 1;
             self.runs[idx].len += 1;
@@ -80,7 +78,7 @@ impl RunContainer {
             return false; // past this run's end — not present
         }
         if run.len == 0 {
-            self.runs.remove(i); // single-value run vanishes
+            self.runs.remove(i);
         } else if v == run.start {
             self.runs[i].start += 1;
             self.runs[i].len -= 1;
@@ -154,21 +152,21 @@ impl RunContainer {
                     start: v as u16,
                     len: 0,
                 });
-                w &= w - 1; // clear lowest set bit
+                w &= w - 1;
             }
         }
         Self { runs, cardinality }
     }
 
     pub fn to_array(&self) -> ArrayContainer {
-        let mut a = ArrayContainer::new();
+        let mut values = Vec::with_capacity(self.cardinality as usize);
         for run in &self.runs {
             let end = run.start as u32 + run.len as u32;
             for v in run.start as u32..=end {
-                a.insert(v as u16);
+                values.push(v as u16);
             }
         }
-        a
+        ArrayContainer::from_sorted_vec(values)
     }
 
     pub fn to_bitmap(&self) -> BitmapContainer {

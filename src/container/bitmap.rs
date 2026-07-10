@@ -35,7 +35,7 @@ impl BitmapContainer {
             while w != 0 {
                 let bit = w.trailing_zeros();
                 out.push((word_idx as u16) * 64 + bit as u16);
-                w &= w - 1; // clear the lowest set bit
+                w &= w - 1;
             }
         }
         // Pushed in ascending word/bit order, so the vec is sorted by construction.

@@ -356,7 +356,7 @@ fn or_bitmap_run(b: &BitmapContainer, r: &RunContainer) -> Container {
 
 fn and_run_run(a: &RunContainer, b: &RunContainer) -> Container {
     let (ra, rb) = (a.runs(), b.runs());
-    let mut out: Vec<Run> = Vec::new();
+    let mut out: Vec<Run> = Vec::with_capacity(ra.len() + rb.len());
     let (mut i, mut j) = (0, 0);
     while i < ra.len() && j < rb.len() {
         // Boundary math in u32: start + len can reach 65535.
@@ -388,7 +388,7 @@ fn and_run_run(a: &RunContainer, b: &RunContainer) -> Container {
 
 fn or_run_run(a: &RunContainer, b: &RunContainer) -> Container {
     let (ra, rb) = (a.runs(), b.runs());
-    let mut out: Vec<Run> = Vec::new();
+    let mut out: Vec<Run> = Vec::with_capacity(ra.len() + rb.len());
     let (mut i, mut j) = (0, 0);
     loop {
         // Take the next run by ascending start across both lists.

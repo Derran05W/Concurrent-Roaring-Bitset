@@ -131,10 +131,10 @@ our operands are `optimize()`d into run containers, and `roaring` 0.10 has no ru
   clone-per-write is the read-optimized design being measured, not a regression — and both
   reclamation schemes price it identically (528 vs 534 ms), because the clone dominates.
 - **T2 (read95 monotonic to 8t, ≥4× own 1t): missed by all three.** Best self-relative ratio is
-  sharded at 2.43×; epoch is the only structure monotonic through 8 threads (1.83×). Causes: the
-  M5's ~4 performance cores knee every curve at 4 threads (added threads land on efficiency
-  cores), and the RCU types serialize on per-shard clones because every workload in the matrix
-  contains writes.
+  sharded at 2.43×; sharded and epoch are both monotonic through 8 threads (2.43×/1.83×), while
+  snapshot dips at 2 threads. Causes: the M5's ~4 performance cores knee every curve at 4 threads
+  (added threads land on efficiency cores), and the RCU types serialize on per-shard clones
+  because every workload in the matrix contains writes.
 - **T3 (≤2× of `roaring` everywhere): met with margin** — worst unfavorable ratio is 1.02×
   (`build/sparse`), statistical parity, after an optimization pass (structure-of-arrays key
   layout, cache-line-padded shards, fat LTO) documented in `commit.md`.
@@ -159,13 +159,14 @@ each retired snapshot is freed immediately by whoever drops the last reference, 
 latency stay steady — snapshot keeps improving through 8 threads on write95 (0.096 → 0.106 Mops)
 where epoch regresses.
 
-**Epoch (`crossbeam-epoch`) — the best pure-read scaler, the worst under write churn.** It is the
-only structure whose read95 curve is monotonic through 8 threads, because its read path is a pin +
-`Acquire` load with no shared-cache-line write at all. But deferred reclamation cuts both ways:
-with many threads pinning constantly, epoch advancement lags, retired O(shard) snapshots
-accumulate, and their destruction lands in bursts on operating threads — write95 *drops* from
-0.078 to 0.059 Mops between 4 and 8 threads while `Arc`'s eager frees keep snapshot inching up.
-The reclamation scheme's payoff is confined to the read path.
+**Epoch (`crossbeam-epoch`) — the best pure-read scaler, the worst under write churn.** Its read95
+curve is monotonic through 8 threads and keeps growing where sharded's 4t→8t step nearly flattens
+(+7.9%), because its read path is a pin + `Acquire` load with no shared-cache-line write at all —
+architecturally the cleanest read path of the three. But
+deferred reclamation cuts both ways: with many threads pinning constantly, epoch advancement lags,
+retired O(shard) snapshots accumulate, and their destruction lands in bursts on worker threads —
+write95 *drops* from 0.078 to 0.059 Mops between 4 and 8 threads while `Arc`'s eager frees keep
+snapshot inching up. The reclamation scheme's payoff is confined to the read path.
 
 **Rule of thumb from the data:** under any workload with a nontrivial write fraction, sharding
 plus a fast `RwLock` is simply the right call at this scale. The RCU designs make sense only when

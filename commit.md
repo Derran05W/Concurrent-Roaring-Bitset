@@ -165,9 +165,10 @@ write95:
   the whole shard before mutating (single-writer RCU) — the deliberate read-optimized tradeoff the
   plan set out to measure, not a regression. The two reclamation schemes price the write path
   identically (528 vs 534 ms): the clone dominates and the reclamation choice is noise there.
-- **Where lock-free reads beat the `RwLock`, and where they don't.** Relative read *scaling* is
-  cleaner lock-free: epoch is the only structure monotonic through 8 threads on read95
-  (2.26→4.14 Mops, 1.83×), while every sharded row flattens or dips past 4 threads. But in
+- **Where lock-free reads beat the `RwLock`, and where they don't.** On read95, sharded and epoch
+  both rise monotonically through 8 threads (snapshot dips at 2t); sharded's 4t→8t step is small
+  (+7.9%) while epoch keeps growing (2.26→4.14 Mops) — the signature of a read path that writes no
+  shared cache line, where even the padded `RwLock` still RMWs its lock word on every read. But in
   *absolute* terms sharded wins every measured cell (69.99 vs 4.14 Mops at read95/8t) because
   every harness workload contains writes, and each RCU write clones a large clustered shard —
   snapshot/epoch throughput is clone-bound, not read-bound (`write95` collapses to
@@ -177,8 +178,9 @@ write95:
   the harness matrix.
 - **T2 (read95 monotonic to 8t, ≥4× its own 1t): missed by all three** — best self-relative ratio
   is sharded at 2.43×. The standing P7 causes hold: the M5's 4 P-core topology knees every curve
-  at 4 threads, and the RCU types are additionally serialized on per-shard clones. Epoch satisfies
-  the monotonicity half of T2; no structure reaches the 4× magnitude on this box.
+  at 4 threads, and the RCU types are additionally serialized on per-shard clones. Sharded and
+  epoch satisfy the monotonicity half of T2 (snapshot's 2t dip breaks it); no structure reaches
+  the 4× magnitude on this box.
 - **Epoch vs snapshot — the reclamation tradeoff, measured.** On reads, epoch scales slightly
   better (ahead of snapshot at every 2t–8t read95 cell, no 2t dip) at ~2 pp more single-thread tax
   (pin vs guard load). On write-containing mixes, epoch *regresses* past 4 threads (write95
@@ -260,6 +262,10 @@ number itself got 38% faster — the ratio's denominator rose with the same opti
 cause analysis stands: past the M5's 4 P-cores, added threads land on E-cores (4t is already 2.19×
 of 1t), and the 5% write mix still takes exclusive per-shard locks. write95's ratio dipped
 (2.16×→2.04×) for the same denominator reason; its absolute 8t throughput is +32%.
+
+_The OPT "after" scaling columns are that pass's own measurement run; the P8 comparative matrix
+above (re-measured at P8b on identical code) supersedes them as the final numbers — deltas between
+the two runs (e.g. sharded read95 8t 75.97 vs 69.99) are run-to-run variance._
 
 ---
 
@@ -539,10 +545,10 @@ concurrent types), the scaling harness (`epoch` structure), and the tax bench (`
 Measured: Baseline A tax — reads **−11.4%** (T1 ✓; ~2 pp behind snapshot's ArcSwap load), build
 **+5115% (≈52×)** (clone-per-write, intentionally missed with cause — identical to snapshot's
 528 ms, reclamation choice is noise on the write path). Fresh full-matrix
-`bench-results/scaling.csv` (all four structures × three workloads × {1,2,4,8}t): epoch is the
-only structure monotonic through 8t on read95 (2.26→4.14 Mops, 1.83×) but regresses past 4t on
-write mixes (epoch-GC burst reclamation vs `Arc`'s eager frees). Final comparative tables +
-written reading in Ledger — P8. Stress suite green for sharded/snapshot/epoch under `--release`.
+`bench-results/scaling.csv` (all four structures × three workloads × {1,2,4,8}t): epoch is
+monotonic through 8t on read95 (2.26→4.14 Mops, 1.83×; sharded is too, snapshot dips at 2t) but
+regresses past 4t on write mixes (epoch-GC burst reclamation vs `Arc`'s eager frees). Final
+comparative tables + written reading in Ledger — P8. Stress suite green for sharded/snapshot/epoch under `--release`.
 Deviations: **P8b · 2026-07-10** — shared `update()` helper (P8a rationale); `Relaxed` null-swap
 in `Drop`. See Deviations section.
 Next: P9
@@ -563,6 +569,23 @@ Next: — (project complete)
 
 ---
 
+### POLISH — Post-P9 review pass (2026-07-10)
+Commit: (fill at commit time)
+Done: Review-pass cleanups. Comments: five what-comments trimmed (run.rs ×4, bitmap.rs ×1) per §1.3.
+Code: `and_run_run`/`or_run_run` outputs presized (symmetry with the array kernels; effect below
+criterion noise — ledger numbers not re-measured); `RunContainer::to_array` now pushes ascending
+values into a presized vec via `from_sorted_vec` instead of per-value binary-search inserts
+(untimed path, same form OPT gave `BitmapContainer::to_array`). Docs: corrected a monotonicity
+claim repeated in six places — sharded read95 is also strictly monotonic through 8t (28.78→69.99),
+so "epoch is the only structure monotonic" was wrong; reworded to epoch's true distinction (no
+shared-cache-line writes on the read path). Added an OPT-section note that the P8b full-matrix
+rerun supersedes the OPT run's scaling columns.
+Measured: n/a (no re-measurement; code deltas are sub-noise or on untimed paths)
+Deviations: none
+Next: — (project complete)
+
+---
+
 ## Resume Bullets
 
 - Built a concurrent Roaring bitmap in Rust and benchmarked three concurrency strategies —
@@ -574,9 +597,10 @@ Next: — (project complete)
 - Implemented lock-free read paths over per-shard RCU snapshots with two memory-reclamation
   schemes (`Arc` refcounting vs. `crossbeam-epoch` deferred GC), reasoning about
   Acquire/Release publication orderings and the soundness invariants at every `unsafe` site;
-  measured that deferred reclamation wins on read scaling (the only design monotonic through
-  8 threads) but regresses 24% past 4 threads under write churn, where eager refcounting keeps
-  improving — a reclamation tradeoff quantified, not assumed.
+  measured that deferred reclamation gives the smoothest read scaling (monotonic through
+  8 threads, no shared-cache-line writes on the read path) but regresses 24% past 4 threads
+  under write churn, where eager refcounting keeps improving — a reclamation tradeoff
+  quantified, not assumed.
 - Designed a two-baseline benchmark methodology separating "concurrency tax" (each concurrent
   structure single-threaded vs. our own sequential implementation) from absolute quality (our
   sequential implementation vs. the published `roaring` crate), with pinned-seed deterministic
