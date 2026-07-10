@@ -22,7 +22,7 @@ implementation departed from the plan in any way.
 - [x] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
 - [x] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
 - [x] **P8b** — `EpochRoaringBitmap` (`crossbeam-epoch` lock-free reads)
-- [ ] **P9** — Comparative writeup, graphs, resume bullets
+- [x] **P9** — Comparative writeup, graphs, resume bullets
 
 ---
 
@@ -549,6 +549,38 @@ Next: P9
 
 ---
 
+### P9 — Comparative writeup, graphs, resume bullets (2026-07-10)
+Commit: _recorded post-commit_
+Done: `scripts/plot.py` (matplotlib + stdlib `csv`; reads `bench-results/scaling.csv`, emits
+`docs/graphs/read_scaling.png` and `docs/graphs/write_impact.png` — log-scale throughput vs
+threads, one line per structure, both committed). `README.md` with the eight prescribed sections
+(overview, design, the two-baseline degradation model, methodology incl. machine spec, results
+with T1/T2/T3 verdicts, per-structure tradeoff analysis, limitations, future work), all numbers
+from this ledger. Resume bullets below. Every phase checkbox is now ticked.
+Measured: n/a (no new measurements — P9 presents the P6/P7/P8 ledger numbers).
+Deviations: none
+Next: — (project complete)
+
+---
+
 ## Resume Bullets
 
-_Filled at P9 with real measured numbers — see CLAUDE.md P9 deliverables._
+- Built a concurrent Roaring bitmap in Rust and benchmarked three concurrency strategies —
+  sharded `RwLock` vs. RCU (`arc-swap`) and epoch-based (`crossbeam-epoch`) lock-free reads —
+  across read/write mixes; the sharded design sustained 70 Mops/s at 8 threads (2.4× its
+  1-thread throughput, 13× the sequential baseline) with a *negative* single-threaded
+  concurrency tax (reads 19% faster than the sequential structure, because sharding also
+  partitions the key space).
+- Implemented lock-free read paths over per-shard RCU snapshots with two memory-reclamation
+  schemes (`Arc` refcounting vs. `crossbeam-epoch` deferred GC), reasoning about
+  Acquire/Release publication orderings and the soundness invariants at every `unsafe` site;
+  measured that deferred reclamation wins on read scaling (the only design monotonic through
+  8 threads) but regresses 24% past 4 threads under write churn, where eager refcounting keeps
+  improving — a reclamation tradeoff quantified, not assumed.
+- Designed a two-baseline benchmark methodology separating "concurrency tax" (each concurrent
+  structure single-threaded vs. our own sequential implementation) from absolute quality (our
+  sequential implementation vs. the published `roaring` crate), with pinned-seed deterministic
+  datasets, criterion microbenchmarks, and differential property tests on every operation; a
+  measurement-driven optimization pass (SoA key layout, cache-line-padded shards, fat LTO)
+  brought the sequential implementation to ≤1.02× of the published crate on all 13 benchmarks
+  and raised 8-thread read throughput 51%.
