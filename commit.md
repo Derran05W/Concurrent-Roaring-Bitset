@@ -16,7 +16,7 @@ implementation departed from the plan in any way.
 - [x] **P1** — `ArrayContainer` + `Container` enum
 - [x] **P2** — `BitmapContainer` + array↔bitmap conversion
 - [x] **P3** — `RunContainer` + smallest-of-three `optimize`
-- [ ] **P4** — `RoaringBitmap` top level + differential testing
+- [x] **P4** — `RoaringBitmap` top level + differential testing
 - [ ] **P5** — Set operations (`and` / `or`)
 - [ ] **P6** — Sequential baseline benchmarks (Baseline B recorded)
 - [ ] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
@@ -170,6 +170,25 @@ insert- and remove-driven run→bitmap demotion.
 Measured: n/a
 Deviations: none
 Next: P4
+
+### P4 — `RoaringBitmap` top level + differential testing (2026-07-09)
+Commit: <pending>
+Done: `split`/`join` value-model helpers (`bitmap.rs`) with boundary units; top-level
+`RoaringBitmap` (`Vec<(u16, Container)>` sorted-unique-by-key) with `new`/`insert`/`remove`
+(drops emptied containers per the never-empty invariant) / `contains` / `len` (no cached global
+count) / `is_empty` / `optimize` / `#[doc(hidden)] assert_invariants` (keys sorted+unique, no
+empty container, per-container structural checks with recomputed cached cardinalities via a new
+`Container::assert_invariants`). Added `Container::single(v)` for the new-key path and re-exported
+`RoaringBitmap` from the crate root. Differential tests (`tests/differential.rs`) vs
+`roaring::RoaringBitmap`: `matches_roaring_crate` (≤3000-op streams, every return value + final
+len + sampled membership match), `optimize_preserves_semantics` (optimize interleaved, membership/
+len unchanged), and boundary units at `0`/`u32::MAX`/`0xFFFF`/`0x1_0000`.
+Measured: n/a
+Deviations: none — `Container::single` and `Container::assert_invariants` are helper methods the
+plan's prescribed logic requires (single-value-array construction for `insert`'s `Err` arm; the
+per-container half of `RoaringBitmap::assert_invariants`); both live in the container module where
+the leaf accessors are, keeping representation knowledge out of `bitmap.rs`.
+Next: P5
 
 ---
 

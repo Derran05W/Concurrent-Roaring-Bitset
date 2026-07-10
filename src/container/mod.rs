@@ -16,6 +16,13 @@ pub enum Container {
 }
 
 impl Container {
+    /// A fresh container holding exactly `v`. Every key starts life as an `ArrayContainer` (§2.4).
+    pub fn single(v: u16) -> Container {
+        let mut a = ArrayContainer::new();
+        a.insert(v);
+        Container::Array(a)
+    }
+
     pub fn insert(&mut self, v: u16) -> bool {
         match self {
             Container::Array(a) => {
@@ -155,6 +162,59 @@ impl Container {
                     Container::Run(_) => return,
                 };
                 *self = Container::Run(r);
+            }
+        }
+    }
+}
+
+impl Container {
+    /// Assert this container's structural invariants (§2.3 table). Used by
+    /// `RoaringBitmap::assert_invariants` from integration tests; recomputes cached fields and
+    /// compares them against the stored caches.
+    pub(crate) fn assert_invariants(&self) {
+        match self {
+            Container::Array(a) => {
+                let s = a.as_slice();
+                // Stored inside a RoaringBitmap, an array never exceeds the bitmap threshold.
+                assert!(
+                    s.len() <= 4096,
+                    "array cardinality {} exceeds 4096",
+                    s.len()
+                );
+                for w in s.windows(2) {
+                    assert!(w[0] < w[1], "array values not strictly increasing");
+                }
+            }
+            Container::Bitmap(b) => {
+                let popcount: u32 = b.words().iter().map(|w| w.count_ones()).sum();
+                assert_eq!(
+                    popcount,
+                    b.cardinality(),
+                    "bitmap cached cardinality != popcount"
+                );
+                // A stored bitmap always sits strictly above the array threshold.
+                assert!(
+                    b.cardinality() > 4096,
+                    "stored bitmap cardinality {} not > 4096",
+                    b.cardinality()
+                );
+            }
+            Container::Run(r) => {
+                let mut card: u32 = 0;
+                let mut prev_end: Option<u32> = None;
+                for run in r.runs() {
+                    // Boundary math in u32: start + len can reach 65535 (§P3 rule).
+                    let start = run.start as u32;
+                    let end = start + run.len as u32;
+                    if let Some(pe) = prev_end {
+                        // Sorted, non-overlapping AND non-adjacent: a gap of ≥1 must separate runs,
+                        // else they would have been merged into one run.
+                        assert!(start > pe + 1, "runs overlap or are adjacent");
+                    }
+                    card += run.len as u32 + 1;
+                    prev_end = Some(end);
+                }
+                assert_eq!(card, r.cardinality(), "run cached cardinality != Σ(len+1)");
             }
         }
     }

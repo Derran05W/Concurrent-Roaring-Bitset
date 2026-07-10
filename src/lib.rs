@@ -2,3 +2,5 @@
 
 pub mod bitmap;
 pub mod container;
+
+pub use bitmap::RoaringBitmap;
