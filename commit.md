@@ -144,7 +144,7 @@ deviation — the plan prescribes the method.
 Next: P2
 
 ### P2 — `BitmapContainer` + array↔bitmap conversion (2026-07-09)
-Commit: <pending>
+Commit: d40118e
 Done: `BitmapContainer` (`Box<[u64; 1024]>` + cached `u32` cardinality) with
 `new`/`from_array`/`to_array`/`contains`/`insert`/`remove`/`cardinality`/`is_empty`/`num_runs`
 (bit-trick fold with word-boundary correction) and `pub(crate) words()`. `Container` gained the
