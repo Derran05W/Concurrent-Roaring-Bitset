@@ -477,7 +477,7 @@ Next: P8b
 ---
 
 ### OPT — Post-P8a optimization pass (2026-07-09)
-Commit: _(recorded in follow-up)_
+Commit: 2d40098
 Done: User-directed performance pass over everything built through P8a — SoA key/container layout
 for `RoaringBitmap`; 128-byte cache-line-padded shards in both concurrent types; fat-LTO/1-CGU
 release profile; presized `and`/`or` outputs; direct-push `to_array`. Full criterion suite, tax
