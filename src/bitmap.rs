@@ -14,6 +14,57 @@ pub fn join(key: u16, low: u16) -> u32 {
     ((key as u32) << 16) | low as u32
 }
 
+/// Deterministic benchmark datasets, shared by the criterion bench, the P7 scaling binary, and
+/// tests. `#[doc(hidden) pub]` so benches (which cannot import from `tests/`) can reach them while
+/// they stay out of the public API surface. Seeds are pinned so every phase measures the same data.
+#[doc(hidden)]
+pub mod datasets {
+    use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
+    use rand::{Rng, SeedableRng};
+
+    /// `0..1_000_000` — contiguous, so long runs / full bitmap containers.
+    pub fn dense() -> Vec<u32> {
+        (0..1_000_000).collect()
+    }
+
+    /// 1,000,000 uniform random draws (duplicates permitted). ~15 values per key → array containers.
+    pub fn sparse() -> Vec<u32> {
+        // Pinned seed: identical input to every impl is what makes the comparison fair.
+        let mut rng = StdRng::seed_from_u64(0xDEAD_BEEF);
+        (0..1_000_000).map(|_| rng.random::<u32>()).collect()
+    }
+
+    /// 1,000 random bases, each contributing a length-1000 contiguous span → run/array mixture.
+    pub fn clustered() -> Vec<u32> {
+        // 0xC0FFEE regrouped to 4-digit blocks for clippy::unusual_byte_groupings (same value).
+        let mut rng = StdRng::seed_from_u64(0x00C0_FFEE);
+        let mut out = Vec::with_capacity(1_000_000);
+        for _ in 0..1_000 {
+            // Cap the base so `base + 1_000` cannot overflow `u32`.
+            let base = rng.random_range(0..=u32::MAX - 1_000);
+            out.extend(base..base + 1_000);
+        }
+        out
+    }
+
+    /// 500,000 hits sampled (with replacement) from `data` + 500,000 uniform random `u32`,
+    /// concatenated then shuffled — a ~50% hit rate probe stream.
+    pub fn probes(data: &[u32]) -> Vec<u32> {
+        let mut rng = StdRng::seed_from_u64(0xFEED_BEEF);
+        let mut out = Vec::with_capacity(1_000_000);
+        for _ in 0..500_000 {
+            let idx = rng.random_range(0..data.len());
+            out.push(data[idx]);
+        }
+        for _ in 0..500_000 {
+            out.push(rng.random::<u32>());
+        }
+        out.shuffle(&mut rng);
+        out
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct RoaringBitmap {
     // Sorted by key, keys unique. This exact shape is what P7 shards (partition by key).

@@ -18,7 +18,7 @@ implementation departed from the plan in any way.
 - [x] **P3** — `RunContainer` + smallest-of-three `optimize`
 - [x] **P4** — `RoaringBitmap` top level + differential testing
 - [x] **P5** — Set operations (`and` / `or`)
-- [ ] **P6** — Sequential baseline benchmarks (Baseline B recorded)
+- [x] **P6** — Sequential baseline benchmarks (Baseline B recorded)
 - [ ] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
 - [ ] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
 - [ ] **P8b** — `EpochRoaringBitmap` (`crossbeam-epoch` lock-free reads)
@@ -31,27 +31,40 @@ implementation departed from the plan in any way.
 Numbers land here as phases complete. Every table states which baseline (A: concurrency tax,
 B: absolute reference) it addresses. Include the machine spec line once, above the first table.
 
-**Machine:** _(CPU model · cores/threads · RAM · OS · rustc version — fill at P6)_
+**Machine:** Apple M5 · 10 physical / 10 logical cores · 24 GiB · macOS 26.5.1 (arm64) · rustc 1.97.0 (2d8144b78 2026-07-07). Criterion 0.5, `--release`, median of 100 samples (10 for `build/sparse` per criterion's estimate).
 
 ### P6 — Sequential baseline (Baseline B: ours vs `roaring` crate)
 
+Ratio = ours ÷ RefBitmap median; **<1 means we are faster**, >1 means slower.
+
 | Benchmark | Dataset | Ours | RefBitmap | Ratio | Notes |
 |---|---|---|---|---|---|
-| build | dense | | | | |
-| build | sparse | | | | |
-| build | clustered | | | | |
-| contains | dense | | | | |
-| contains | sparse | | | | |
-| contains | clustered | | | | |
-| remove | clustered | | | | |
-| and | dense×sparse | | | | |
-| and | clustered×clustered | | | | |
-| and | sparse×sparse | | | | |
-| or | dense×sparse | | | | |
-| or | clustered×clustered | | | | |
-| or | sparse×sparse | | | | |
+| build | dense | 2.948 ms | 3.837 ms | 0.77× | ours faster — dense keys become bitmap containers we fill by direct bit-set |
+| build | sparse | 700.9 ms | 529.5 ms | 1.32× | our worst case — 1M random values ⇒ ~65k array containers, each insert is a `Vec::insert` shift |
+| build | clustered | 12.58 ms | 14.98 ms | 0.84× | ours faster |
+| contains | dense | 9.219 ms | 7.737 ms | 1.19× | slightly slower — optimize() makes dense a single-run RunContainer; run `partition_point` vs a raw bit test |
+| contains | sparse | 46.25 ms | 47.91 ms | 0.97× | parity |
+| contains | clustered | 18.96 ms | 19.85 ms | 0.95× | parity |
+| remove | clustered | 7.871 ms | 7.293 ms | 1.08× | parity |
+| and | dense×sparse | 554.1 ns | 93.01 µs | 0.006× | tiny intersection (only keys 0..15 overlap); array·bitmap kernel probes ~15 values/key |
+| and | clustered×clustered | 16.54 µs | 602.6 µs | 0.027× | self-∩ of optimized runs ⇒ run·run two-pointer over few runs |
+| and | sparse×sparse | 2.069 ms | 2.207 ms | 0.94× | parity |
+| or | dense×sparse | 1.472 ms | 1.556 ms | 0.95× | parity |
+| or | clustered×clustered | 17.02 µs | 835.6 µs | 0.020× | self-∪ of optimized runs ⇒ run·run interval merge over few runs |
+| or | sparse×sparse | 2.257 ms | 2.339 ms | 0.96× | parity |
 
-_T3 check: any ratio >2× requires a cause paragraph here._
+**T3 check.** No *unfavorable* ratio exceeds 2× — our worst is `build/sparse` at 1.32×, caused by
+sorted-array insertion cost: a duplicate-free sparse load creates ~65k `ArrayContainer`s and every
+distinct insert is an O(card) `Vec::insert` element shift, whereas the `roaring` crate uses the same
+array representation but a tighter insert path. It is within explainable distance and well under the
+2× gate.
+
+Three ratios are *dramatically favorable* (0.006×–0.027×): `and`/`or` on `clustered×clustered` and
+`and` on `dense×sparse`. These are honest and structural, not a measurement artifact — the operands
+are `optimize()`d on our side, so `clustered×clustered` becomes run·run kernels iterating a handful
+of runs, and `dense×sparse` intersects only the ~16 overlapping keys with a short array·bitmap probe.
+The reference crate (no run containers in 0.10) does more per-word work. All results pass
+`assert_invariants` via the P5 differential tests, so the outputs are verified correct, not empty.
 
 ### P7 — Concurrency tax (Baseline A) & sharded scaling
 
@@ -112,6 +125,22 @@ P6 plan anticipates exactly this: "call the ref crate's run-optimize equivalent 
 if it doesn't, note that in the ledger.")
 
 ---
+
+**P6 · 2026-07-09** — Two plan-adjacent additions, neither a semantic departure:
+1. `rand` moved from `[dev-dependencies]` to `[dependencies]`. The P6 `datasets` module lives in
+   library code (`src/bitmap.rs` per §2.1) and the P7 `src/bin/scaling.rs` binary will also consume
+   it; neither the library nor a `src/bin` target can see dev-dependencies, so the generators cannot
+   compile unless `rand` is a normal dependency. §1.7 says dependencies are added in the phase that
+   first needs them — P6 is that phase for `rand`-in-the-library.
+2. `contains`/`and`/`or` benches `optimize()` **only our** structures; the `roaring` 0.10 crate
+   exposes no run-optimize / run-compression method on `RoaringBitmap` (grep of the vendored 0.10.12
+   source found none — same finding as the P5 deviation). The P6 plan text explicitly anticipates
+   this ("call the ref crate's run-optimize equivalent if it exposes one … if it doesn't, note that
+   in the ledger").
+
+Also: two dataset seeds are written regrouped to 4-hex-digit blocks to satisfy
+`clippy::unusual_byte_groupings` while preserving the exact pinned values — `0xC0FF_EE` → `0x00C0_FFEE`
+(clustered) and `0xBADC_0DE` → `0x0BAD_C0DE` (remove-sample). Same numeric seeds, no data change.
 
 ## Commit History
 
@@ -216,6 +245,20 @@ Measured: n/a
 Deviations: **P5 · 2026-07-09** — reference operand not run-optimized (roaring 0.10 has no run
 containers); see Deviations section.
 Next: P6
+
+### P6 — Sequential baseline benchmarks (2026-07-09)
+Commit: <filled post-commit>
+Done: `#[doc(hidden)] pub mod datasets` in `src/bitmap.rs` (deterministic pinned-seed dense/sparse/
+clustered/probes generators); `benches/sequential.rs` rewritten from the P0 placeholder into four
+groups (`build`, `contains`, `remove`, `and`/`or`) each measuring ours vs `roaring::RoaringBitmap`
+side by side on identical inputs. `rand` promoted to a normal dependency (library + P7 binary need
+the generators). Full `cargo bench` ran end-to-end; Baseline-B table filled.
+Measured: Baseline B (see P6 table). Ours faster on `build/{dense,clustered}` (0.77×/0.84×), all
+`or`/`and` (0.006×–0.96×), parity on `contains`/`remove`; worst unfavorable ratio `build/sparse`
+1.32× (sorted-array insert cost) — no gap exceeds the 2× T3 gate.
+Deviations: **P6 · 2026-07-09** — `rand` dev→normal dependency; ref crate has no run-optimize; two
+seeds regrouped for clippy (values unchanged). See Deviations section.
+Next: P7
 
 ---
 

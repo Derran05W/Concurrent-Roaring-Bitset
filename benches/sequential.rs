@@ -1,8 +1,158 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+//! Sequential baseline benchmarks (Baseline B: ours vs the `roaring` crate; also the sequential
+//! reference point for Baseline A in P7). Every group measures our `RoaringBitmap` and the
+//! reference `roaring::RoaringBitmap` side by side on identical, pinned-seed inputs.
 
-fn bench(c: &mut Criterion) {
-    c.bench_function("placeholder", |b| b.iter(|| std::hint::black_box(1 + 1)));
+use concurrent_roaring::bitmap::datasets;
+use concurrent_roaring::RoaringBitmap;
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use roaring::RoaringBitmap as RefBitmap;
+use std::hint::black_box;
+
+fn build_ours(data: &[u32]) -> RoaringBitmap {
+    let mut b = RoaringBitmap::new();
+    for &x in data {
+        b.insert(x);
+    }
+    b
 }
 
-criterion_group!(benches, bench);
+fn build_ref(data: &[u32]) -> RefBitmap {
+    let mut b = RefBitmap::new();
+    for &x in data {
+        b.insert(x);
+    }
+    b
+}
+
+/// build/{dense,sparse,clustered}: insert every value into a fresh structure.
+fn bench_build(c: &mut Criterion) {
+    for (name, data) in [
+        ("dense", datasets::dense()),
+        ("sparse", datasets::sparse()),
+        ("clustered", datasets::clustered()),
+    ] {
+        let mut g = c.benchmark_group(format!("build/{name}"));
+        g.bench_function("ours", |b| b.iter(|| black_box(build_ours(&data))));
+        g.bench_function("roaring", |b| b.iter(|| black_box(build_ref(&data))));
+        g.finish();
+    }
+}
+
+/// contains/{dense,sparse,clustered}: pre-built structure, optimize()d on our side (the `roaring`
+/// 0.10 crate exposes no run-optimize equivalent — see the P6 ledger note), then iterate the probe
+/// stream.
+fn bench_contains(c: &mut Criterion) {
+    for (name, data) in [
+        ("dense", datasets::dense()),
+        ("sparse", datasets::sparse()),
+        ("clustered", datasets::clustered()),
+    ] {
+        let mut ours = build_ours(&data);
+        ours.optimize();
+        let refb = build_ref(&data);
+        let probes = datasets::probes(&data);
+
+        let mut g = c.benchmark_group(format!("contains/{name}"));
+        g.bench_function("ours", |b| {
+            b.iter(|| {
+                for &x in &probes {
+                    black_box(ours.contains(x));
+                }
+            })
+        });
+        g.bench_function("roaring", |b| {
+            b.iter(|| {
+                for &x in &probes {
+                    black_box(refb.contains(x));
+                }
+            })
+        });
+        g.finish();
+    }
+}
+
+/// remove/clustered: a fresh clone of the pre-built structure per batch, then remove 100,000
+/// values sampled from the dataset.
+fn bench_remove(c: &mut Criterion) {
+    let data = datasets::clustered();
+    let ours = build_ours(&data);
+    let refb = build_ref(&data);
+
+    // Pinned seed for the remove sample (§ appendix seed table): 0xBADC0DE, regrouped to 4-digit
+    // blocks for clippy::unusual_byte_groupings (same value).
+    let mut rng = StdRng::seed_from_u64(0x0BAD_C0DE);
+    let victims: Vec<u32> = (0..100_000)
+        .map(|_| data[rng.random_range(0..data.len())])
+        .collect();
+
+    let mut g = c.benchmark_group("remove/clustered");
+    g.bench_function("ours", |b| {
+        b.iter_batched(
+            || ours.clone(),
+            |mut m| {
+                for &x in &victims {
+                    black_box(m.remove(x));
+                }
+                m
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    g.bench_function("roaring", |b| {
+        b.iter_batched(
+            || refb.clone(),
+            |mut m| {
+                for &x in &victims {
+                    black_box(m.remove(x));
+                }
+                m
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    g.finish();
+}
+
+/// and/or over the three prescribed dataset pairs; both operands pre-built and (on our side)
+/// optimized so Run kernels participate.
+fn bench_setops(c: &mut Criterion) {
+    let dense = datasets::dense();
+    let sparse = datasets::sparse();
+    let clustered = datasets::clustered();
+
+    let pairs: [(&str, &[u32], &[u32]); 3] = [
+        ("dense_x_sparse", &dense, &sparse),
+        ("clustered_x_clustered", &clustered, &clustered),
+        ("sparse_x_sparse", &sparse, &sparse),
+    ];
+
+    for (name, a, b_data) in pairs {
+        let mut oa = build_ours(a);
+        let mut ob = build_ours(b_data);
+        oa.optimize();
+        ob.optimize();
+        let ra = build_ref(a);
+        let rb = build_ref(b_data);
+
+        let mut g = c.benchmark_group(format!("and/{name}"));
+        g.bench_function("ours", |bch| bch.iter(|| black_box(oa.and(&ob))));
+        g.bench_function("roaring", |bch| bch.iter(|| black_box(&ra & &rb)));
+        g.finish();
+
+        let mut g = c.benchmark_group(format!("or/{name}"));
+        g.bench_function("ours", |bch| bch.iter(|| black_box(oa.or(&ob))));
+        g.bench_function("roaring", |bch| bch.iter(|| black_box(&ra | &rb)));
+        g.finish();
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_build,
+    bench_contains,
+    bench_remove,
+    bench_setops
+);
 criterion_main!(benches);

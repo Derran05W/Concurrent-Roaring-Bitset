@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Normal (not dev) dependency: the `datasets` module lives in library code (src/bitmap.rs per
+# §2.1) and the P7 `src/bin/scaling.rs` binary also consumes it — neither can see dev-deps.
+rand = "0.9"
 
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1"
 roaring = "0.10"
-rand = "0.9"
 
 [[bench]]
 name = "sequential"
