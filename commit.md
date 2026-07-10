@@ -13,7 +13,7 @@ implementation departed from the plan in any way.
 ## Phase Checklist
 
 - [x] **P0** — Repository scaffold & harness
-- [ ] **P1** — `ArrayContainer` + `Container` enum
+- [x] **P1** — `ArrayContainer` + `Container` enum
 - [ ] **P2** — `BitmapContainer` + array↔bitmap conversion
 - [ ] **P3** — `RunContainer` + smallest-of-three `optimize`
 - [ ] **P4** — `RoaringBitmap` top level + differential testing
@@ -129,6 +129,19 @@ skeleton (`lib.rs`, `bitmap.rs`, `container/{mod,array,bitmap,run}.rs`, `benches
 Measured: n/a
 Deviations: none
 Next: P1
+
+### P1 — `ArrayContainer` + `Container` enum (2026-07-09)
+Commit: _pending_
+Done: `ArrayContainer` (sorted `Vec<u16>`) with `new`/`cardinality`/`is_empty`/`contains`/
+`insert`/`remove`/`num_runs`/`as_slice` per §2.4 array formula; `Container` enum introduced with
+only the `Array` variant, dispatching all six ops. Unit tests (0/65535 boundaries, dup/absent,
+interleaved sortedness, num_runs), proptest `array_matches_btreeset` (vs `BTreeSet<u16>`) and a
+strictly-increasing invariant proptest.
+Measured: n/a
+Deviations: `as_slice` carries a site-local `#[allow(dead_code)]` (why-comment): it is a listed
+P1 deliverable but first consumed by P2/P5, so the lib-only build sees it unused. Not a plan
+deviation — the plan prescribes the method.
+Next: P2
 
 ---
 
