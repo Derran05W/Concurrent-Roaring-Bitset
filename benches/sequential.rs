@@ -3,7 +3,7 @@
 //! reference `roaring::RoaringBitmap` side by side on identical, pinned-seed inputs.
 
 use concurrent_roaring::bitmap::datasets;
-use concurrent_roaring::RoaringBitmap;
+use concurrent_roaring::{ConcurrentRoaringBitmap, RoaringBitmap};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -148,11 +148,77 @@ fn bench_setops(c: &mut Criterion) {
     }
 }
 
+/// Bench-local abstraction over the two structures (§1.4 permits a trait inside a bench file). Only
+/// the build path needs normalizing: `RoaringBitmap::insert` takes `&mut self` while
+/// `ConcurrentRoaringBitmap::insert` takes `&self`. The contains benches call each type's inherent
+/// method directly, so `contains` is not part of the trait.
+trait TaxBench: Default {
+    fn insert(&mut self, x: u32) -> bool;
+}
+
+impl TaxBench for RoaringBitmap {
+    fn insert(&mut self, x: u32) -> bool {
+        RoaringBitmap::insert(self, x)
+    }
+}
+
+impl TaxBench for ConcurrentRoaringBitmap {
+    fn insert(&mut self, x: u32) -> bool {
+        // &self op; the &mut here just satisfies the shared trait signature.
+        ConcurrentRoaringBitmap::insert(self, x)
+    }
+}
+
+fn build_tax<T: TaxBench>(data: &[u32]) -> T {
+    let mut b = T::default();
+    for &x in data {
+        b.insert(x);
+    }
+    b
+}
+
+/// Baseline A (concurrency tax): sequential `RoaringBitmap` vs `ConcurrentRoaringBitmap` run
+/// single-threaded on clustered build + contains. The gap is the cost of the sharding/locking
+/// machinery when there is no contention.
+fn bench_tax(c: &mut Criterion) {
+    let data = datasets::clustered();
+    let probes = datasets::probes(&data);
+
+    let mut g = c.benchmark_group("tax/build_clustered");
+    g.bench_function("sequential", |b| {
+        b.iter(|| black_box(build_tax::<RoaringBitmap>(&data)))
+    });
+    g.bench_function("sharded", |b| {
+        b.iter(|| black_box(build_tax::<ConcurrentRoaringBitmap>(&data)))
+    });
+    g.finish();
+
+    let seq = build_tax::<RoaringBitmap>(&data);
+    let shard = build_tax::<ConcurrentRoaringBitmap>(&data);
+    let mut g = c.benchmark_group("tax/contains_clustered");
+    g.bench_function("sequential", |b| {
+        b.iter(|| {
+            for &x in &probes {
+                black_box(seq.contains(x));
+            }
+        })
+    });
+    g.bench_function("sharded", |b| {
+        b.iter(|| {
+            for &x in &probes {
+                black_box(shard.contains(x));
+            }
+        })
+    });
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_build,
     bench_contains,
     bench_remove,
-    bench_setops
+    bench_setops,
+    bench_tax
 );
 criterion_main!(benches);

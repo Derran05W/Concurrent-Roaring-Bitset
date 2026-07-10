@@ -7,6 +7,9 @@ edition = "2021"
 # Normal (not dev) dependency: the `datasets` module lives in library code (src/bitmap.rs per
 # §2.1) and the P7 `src/bin/scaling.rs` binary also consumes it — neither can see dev-deps.
 rand = "0.9"
+# Why parking_lot over std::sync: no lock poisoning (no `.unwrap()` on every access) and a faster
+# uncontended path — exactly what the P7 concurrency-tax measurement stresses.
+parking_lot = "0.12"
 
 [dev-dependencies]
 criterion = "0.5"

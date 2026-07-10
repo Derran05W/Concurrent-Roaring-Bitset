@@ -183,6 +183,19 @@ impl RoaringBitmap {
         RoaringBitmap { containers: out }
     }
 
+    /// Reassemble a whole map from per-shard clones (P7/P8 `snapshot`). Shards partition the key
+    /// space disjointly by `key & mask`, so each shard's containers are key-disjoint from every
+    /// other's — concatenating them and re-sorting by key reconstructs the map with no kernel merge.
+    /// `pub(crate)` so the private `containers` field stays encapsulated.
+    pub(crate) fn from_shards(shards: impl IntoIterator<Item = RoaringBitmap>) -> Self {
+        let mut containers: Vec<(u16, Container)> = Vec::new();
+        for shard in shards {
+            containers.extend(shard.containers);
+        }
+        containers.sort_by_key(|(k, _)| *k);
+        RoaringBitmap { containers }
+    }
+
     /// Full §2.3/§2.5 invariant check for use from integration tests.
     #[doc(hidden)]
     pub fn assert_invariants(&self) {

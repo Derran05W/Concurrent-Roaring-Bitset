@@ -19,7 +19,7 @@ implementation departed from the plan in any way.
 - [x] **P4** — `RoaringBitmap` top level + differential testing
 - [x] **P5** — Set operations (`and` / `or`)
 - [x] **P6** — Sequential baseline benchmarks (Baseline B recorded)
-- [ ] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
+- [x] **P7** — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling harness + tax (Baseline A)
 - [ ] **P8a** — `SnapshotRoaringBitmap` (`arc-swap` lock-free reads)
 - [ ] **P8b** — `EpochRoaringBitmap` (`crossbeam-epoch` lock-free reads)
 - [ ] **P9** — Comparative writeup, graphs, resume bullets
@@ -68,20 +68,48 @@ The reference crate (no run containers in 0.10) does more per-word work. All res
 
 ### P7 — Concurrency tax (Baseline A) & sharded scaling
 
-Tax (single-threaded, vs sequential `RoaringBitmap`):
+Tax (single-threaded, vs sequential `RoaringBitmap`; overhead = sharded ÷ sequential − 1, criterion median):
 
 | Benchmark | Sequential | Sharded (1 thread) | Overhead % | T1 (≤10%)? |
 |---|---|---|---|---|
-| build/clustered | | | | |
-| contains/clustered | | | | |
+| build/clustered | 11.77 ms | 8.441 ms | **−28.3%** | ✅ (faster) |
+| contains/clustered | 22.46 ms | 16.74 ms | **−25.5%** | ✅ (faster) |
 
-Scaling (`bench-results/scaling.csv` summary, Mops/s):
+The tax is *negative* — the concurrent structure is single-threaded **faster** than the sequential
+one. This is honest, not a measurement error: `ConcurrentRoaringBitmap` is 64 shards, each a whole
+`RoaringBitmap` holding only the keys with `key & 63 == shard`. Sharding therefore *partitions the
+data structure*: each shard's `Vec<(u16, Container)>` is ~1/64 the length, so a `contains` binary
+search is shorter and a build-path `Vec::insert` of a new key shifts ~64× fewer elements. On the
+clustered workload that structural win dominates the uncontended `parking_lot::RwLock` acquire cost
+(a single atomic on an uncontended lock is a handful of nanoseconds). T1 (≤10% overhead) is met with
+margin — the machinery costs less than nothing here because it also shrinks the work.
+
+Scaling (`bench-results/scaling.csv`, Mops/s; 16t clamped out — the M5 reports 10 logical cores):
 
 | Workload | 1t | 2t | 4t | 8t | 16t | 8t/1t | T2 (≥4×)? |
 |---|---|---|---|---|---|---|---|
-| read95 | | | | | | | |
-| mixed50 | | | | | | | |
-| write95 | | | | | | | |
+| read95 | 22.87 | 30.71 | 50.30 | 50.67 | n/a | 2.22× | ❌ |
+| mixed50 | 15.09 | 23.28 | 37.67 | 36.59 | n/a | 2.42× | ❌ |
+| write95 | 12.79 | 20.73 | 33.82 | 28.67 | n/a | 2.24× | ❌ |
+
+**T2 cause analysis (goal missed — §0.2 requires the cause, not a phase failure).** Read-heavy
+throughput rises monotonically through 8 threads but reaches only **2.22×** its 1-thread number, short
+of the ≥4× goal; the write-heavier mixes even *regress* past 4 threads (mixed50 37.67→36.59,
+write95 33.82→28.67). Two causes, both anticipated by the plan and both the explicit motivation for
+P8:
+
+1. **Core topology.** The benchmark box is an Apple M5: 10 logical cores but a heterogeneous
+   performance/efficiency split (~4 P-cores). Every workload's throughput knee is exactly at 4
+   threads — past the P-cores, threads land on much slower E-cores, so 4t→8t adds little and, once
+   write-lock contention rises, goes backwards. This caps *all* structures on this box and is a
+   property of the hardware, not the algorithm.
+2. **The `RwLock` read path is not free of shared writes.** Even a *reader* mutates the lock's atomic
+   word to register itself; two readers on the same shard bounce that cache line. With 64 shards the
+   collision rate is low but non-zero, and the 5% writers take exclusive per-shard locks that stall
+   every reader on that shard for the duration of an O(shard-size) `Vec::insert`. This is precisely
+   the cost P8a/P8b remove by making reads load an immutable snapshot pointer with no shared write —
+   the comparative P8 table will show whether lock-free reads recover the scaling the `RwLock` leaves
+   on the table.
 
 ### P8 — Full comparative matrix
 
@@ -114,6 +142,21 @@ _Written reading of results (required by P8 exit): …_
 ---
 
 ## Deviations from Plan
+
+**P7 · 2026-07-09** — The prescribed bench-local tax trait was to carry both
+`insert(&mut self)` *and* `contains(&self)`. In practice `contains` in the trait is dead code: both
+`RoaringBitmap` and `ConcurrentRoaringBitmap` have an inherent `contains`, so `x.contains(v)` always
+resolves to the inherent method and the trait method is never dispatched — which fails
+`clippy -D warnings` (`dead_code`). The trait therefore carries only `insert` (the one method whose
+signature genuinely differs, `&mut self` vs `&self`, and which the shared generic build loop needs);
+the two `contains` benches call each type's inherent `contains` directly. Functionally identical to
+the plan; the numbers measure the real methods.
+
+Also, the scaling harness runs the `sequential` structure on a plain `&mut RoaringBitmap` in a single
+thread with no lock wrapper (rather than routing it through the concurrent-bench trait behind a
+`Mutex`). This keeps the sequential row a true lock-free reference — wrapping it in a `Mutex` purely
+to fit a `&self` trait would tax the baseline with lock overhead it should not carry. Within the plan
+("`sequential` (single-thread only)").
 
 **P5 · 2026-07-09** — The plan's `setops_match_roaring_crate` test says to "optimize one of them
 to force Run participation." The intent is to exercise *our* Run kernels, so only our operand `a`
@@ -259,6 +302,29 @@ Measured: Baseline B (see P6 table). Ours faster on `build/{dense,clustered}` (0
 Deviations: **P6 · 2026-07-09** — `rand` dev→normal dependency; ref crate has no run-optimize; two
 seeds regrouped for clippy (values unchanged). See Deviations section.
 Next: P7
+
+---
+
+### P7 — `ConcurrentRoaringBitmap` (sharded `RwLock`) + scaling + tax (2026-07-09)
+Commit: <filled post-commit>
+Done: `ConcurrentRoaringBitmap` (`Box<[parking_lot::RwLock<RoaringBitmap>]>`, power-of-two shards,
+default 64, `key & mask` low-bit sharding) with `new`/`with_shard_count`/`insert`/`remove`/`contains`
+/`len`/`is_empty`/`snapshot`/`and`/`or`/`optimize`; per-shard-atomic (non-linearizable) cross-shard
+ops commented at each site. `snapshot` clones each shard under a brief read lock and reassembles via
+a new `pub(crate) RoaringBitmap::from_shards` (key-disjoint concat + sort, no kernel merge).
+`parking_lot = "0.12"` added. Stress tests (`tests/concurrent_stress.rs`): disjoint-partition
+lost-update detector (8 threads, residue classes) and a 2-second 4-writer/4-reader contended smoke,
+both asserting `snapshot().assert_invariants()` — green under `--release`. Scaling harness
+(`src/bin/scaling.rs`): `sequential`+`sharded` × read95/mixed50/write95 × {1,2,4,8} threads (16
+clamped), barrier-synchronized, writes `bench-results/scaling.csv`. Tax group added to
+`benches/sequential.rs` (bench-local trait) comparing both structures single-threaded.
+Measured: Baseline A tax is **negative** (sharded faster: build −28.3%, contains −25.5% — sharding
+shrinks per-shard vectors) ⇒ T1 met. Scaling reaches 2.2–2.4× at 8t (T2 ≥4× **missed** — 4-P-core M5
+topology + `RwLock` reader-atomic/writer-exclusive contention; cause analysis in the P7 ledger,
+motivates P8). See P7 tables.
+Deviations: **P7 · 2026-07-09** — tax trait omits dead `contains`; scaling `sequential` runs lock-free.
+See Deviations section.
+Next: P8a
 
 ---
 
