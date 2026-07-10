@@ -247,7 +247,7 @@ containers); see Deviations section.
 Next: P6
 
 ### P6 — Sequential baseline benchmarks (2026-07-09)
-Commit: <filled post-commit>
+Commit: 90e5de6
 Done: `#[doc(hidden)] pub mod datasets` in `src/bitmap.rs` (deterministic pinned-seed dense/sparse/
 clustered/probes generators); `benches/sequential.rs` rewritten from the P0 placeholder into four
 groups (`build`, `contains`, `remove`, `and`/`or`) each measuring ours vs `roaring::RoaringBitmap`
