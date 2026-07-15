@@ -47,6 +47,111 @@ shared write; writers serialize on a per-shard mutex, clone the current snapshot
 and publish it atomically (Release store paired with the readers' Acquire load). The clone-per-write
 cost is the deliberate, measured tradeoff — these are read-optimized structures.
 
+### Architecture diagrams
+
+**How the pieces fit together.** One sequential `RoaringBitmap` implementation is reused, unmodified,
+as the payload of every shard in all three concurrent wrappers — only the synchronization technique
+wrapped around it differs.
+
+```mermaid
+flowchart TB
+    subgraph SEQ["Sequential core — src/bitmap.rs + src/container/*"]
+        RB["RoaringBitmap<br/>keys: Vec&lt;u16&gt; · containers: Vec&lt;Container&gt;<br/>(sorted, parallel arrays)"]
+        RB -.->|dispatches to| ARR["Array<br/>sorted Vec&lt;u16&gt;<br/>card ≤ 4096"]
+        RB -.->|dispatches to| BMP["Bitmap<br/>Box&lt;[u64; 1024]&gt;<br/>card &gt; 4096"]
+        RB -.->|dispatches to| RUN["Run<br/>sorted (start,len) ranges<br/>created only by optimize()"]
+    end
+
+    subgraph CONC["Concurrent wrappers — src/concurrent/* (one RoaringBitmap per shard, shard = key & (n-1))"]
+        C1["ConcurrentRoaringBitmap<br/>Box&lt;[RwLock&lt;RoaringBitmap&gt;]&gt;"]
+        C2["SnapshotRoaringBitmap<br/>Box&lt;[ArcSwap&lt;RoaringBitmap&gt;]&gt;"]
+        C3["EpochRoaringBitmap<br/>Box&lt;[Atomic&lt;RoaringBitmap&gt;]&gt;"]
+    end
+
+    SEQ ==>|wrapped one-to-one per shard| CONC
+    CONC --> BENCH["benches/sequential.rs (Baseline A tax)<br/>src/bin/scaling.rs (throughput matrix)"]
+    BENCH --> OUT["bench-results/scaling.csv → scripts/plot.py → docs/graphs/*.png"]
+```
+
+**Operation flow** — `insert(x)` traced from the public API down to the container mutation
+(`remove`/`contains` follow the same routing, swapping the lock mode and terminal call):
+
+```mermaid
+flowchart TD
+    A["insert(x: u32)"] --> B["split(x) → key = x >> 16, low = x as u16"]
+    B --> C{"concurrent type?"}
+    C -->|sequential| E["operate on the top-level RoaringBitmap directly"]
+    C -->|any concurrent wrapper| D["shard = key & (num_shards − 1)<br/>(low bits — spreads clustered keys across shards)"]
+    D --> E
+    E --> F["binary_search key in keys Vec"]
+    F -->|"Err(idx): new key"| G["insert (key, Array::new()) at idx"]
+    F -->|"Ok(idx): existing key"| H["Container::insert(low)"]
+    G --> H
+    H --> I{"container variant"}
+    I -->|Array| J["sorted insert;<br/>if this is the 4097th distinct value,<br/>convert to Bitmap FIRST, then insert"]
+    I -->|Bitmap| K["set bit, cardinality += added"]
+    I -->|Run| L["extend/merge/split the run;<br/>if 4×num_runs &gt; 8192, demote to Bitmap"]
+    J --> M["return bool: newly added"]
+    K --> M
+    L --> M
+```
+
+**Container conversion state machine** — every transition is driven by a size comparison, never an
+arbitrary rule; `optimize()` is the *only* path that ever creates a `Run`:
+
+```mermaid
+flowchart LR
+    Array -->|"insert of the 4097th distinct value<br/>(2×4097 B &gt; 8192 B)"| Bitmap
+    Bitmap -->|"remove lands cardinality<br/>exactly on 4096"| Array
+    Array -->|"optimize(): 4×num_runs strictly<br/>smaller than 2×cardinality"| Run
+    Bitmap -->|"optimize(): 4×num_runs<br/>strictly smaller than 8192"| Run
+    Run -->|"optimize(): array/bitmap size<br/>strictly smaller than 4×num_runs"| Array
+    Run -->|"optimize(): bitmap strictly smaller,<br/>or 4×num_runs &gt; 8192 after a mutation"| Bitmap
+```
+
+**Concurrency techniques — read and write path per structure.** All three share the
+shard-per-`RoaringBitmap` layout above; this is what differs inside `shard(key)`:
+
+```mermaid
+flowchart TB
+    subgraph SH["Sharded RwLock — ConcurrentRoaringBitmap"]
+        direction TB
+        SHc["contains(x)"] --> SHr["shard.read()<br/>shared lock, blocks if a writer holds it"]
+        SHr --> SHret["read RoaringBitmap directly, drop lock"]
+        SHi["insert(x) / remove(x)"] --> SHw["shard.write()<br/>exclusive lock, blocks all readers + writers on this shard"]
+        SHw --> SHmut["mutate RoaringBitmap in place, drop lock"]
+    end
+
+    subgraph SN["Snapshot RCU (arc-swap) — SnapshotRoaringBitmap"]
+        direction TB
+        SNc["contains(x)"] --> SNl["current.load()<br/>lock-free Guard, no Arc clone on the hot path"]
+        SNl --> SNret["read snapshot, drop guard"]
+        SNi["insert(x) / remove(x)"] --> SNm["write.lock()<br/>serializes writers only — never blocks readers"]
+        SNm --> SNchk{"op already reflected?<br/>(dup insert / absent remove)"}
+        SNchk -->|yes| SNskip["return early — no clone"]
+        SNchk -->|no| SNclone["clone current RoaringBitmap, mutate the clone"]
+        SNclone --> SNstore["current.store(Arc::new(next))<br/>old Arc freed when its last reader drops it"]
+    end
+
+    subgraph EP["Epoch RCU (crossbeam-epoch) — EpochRoaringBitmap"]
+        direction TB
+        EPc["contains(x)"] --> EPp["pin() epoch guard"]
+        EPp --> EPl["current.load(Acquire, &guard)"]
+        EPl --> EPd["unsafe deref<br/>sound: pointer never null + pin blocks reclamation"]
+        EPi["insert(x) / remove(x)"] --> EPm["write.lock()"]
+        EPm --> EPp2["pin(); load(Acquire); deref"]
+        EPp2 --> EPchk{"op already reflected?"}
+        EPchk -->|yes| EPskip2["return early — no clone"]
+        EPchk -->|no| EPclone["clone, mutate the clone"]
+        EPclone --> EPswap["swap(Release, new)<br/>defer_destroy(old) — freed once no pinned reader can see it"]
+    end
+```
+
+Reading the three side by side: the **lock word itself** is the difference. An `RwLock` read acquire
+still writes a reader-count word (a shared cache line every reader touches), `ArcSwap::load` reads a
+pointer with no writable side effect, and the epoch guard is a thread-local pin with no shared write
+at all — which is exactly the tax ordering measured in [Results](#results) (−19.3% / −13.2% / −11.4%).
+
 ## The degradation question
 
 "Concurrent without performance degradation" is meaningless until you say *degradation relative to
