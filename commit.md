@@ -194,6 +194,77 @@ write95:
   size is per-shard, so `with_shard_count(256)` (vs the default 64) shrinks each cloned unit ~4×
   and would lift the write-heavy numbers proportionally. Not run here.
 
+### Post-P9 — 99.5%-read RCU sensitivity
+
+**Strategy comparison (neither Baseline A nor B):** default 64 shards, clustered dataset, 99.5%
+`contains` / 0.5% `insert`, 2 M operations per thread. Mops/s values are medians of five focused
+samples; the pinned scaling seed and barrier protocol are unchanged.
+
+| Structure | 1t | 2t | 4t | 8t | 8t/1t |
+|---|---:|---:|---:|---:|---:|
+| sharded | 30.96 | 45.60 | 68.52 | **77.68** | 2.51× |
+| snapshot | 19.69 | 27.51 | 37.71 | 36.31 | 1.84× |
+| epoch | 19.37 | 29.75 | **37.99** | **36.94** | 1.91× |
+
+Dropping writes from 5% (`read95`) to 0.5% raises 8-thread snapshot throughput 3.77→36.31 Mops
+(9.6×) and epoch 4.14→36.94 Mops (8.9×), confirming that clone-per-write cost dominated their
+earlier read-heavy results. Epoch and snapshot are effectively tied at 4–8 threads (epoch leads by
+0.8%/1.7%); sharded remains 2.10× faster at 8 threads because even the remaining 0.5% RCU writes
+clone and publish whole shards. Raw focused samples are in `bench-results/read99_5.csv`.
+
+### Post-P9 — Pure reads after 2 M preloaded values
+
+**Strategy comparison (neither Baseline A nor B):** exactly 2 M distinct values were inserted
+before timing, distributed as 64 dense low-value ranges so every default shard held equal work.
+The timed phase is 100% successful `contains`, 2 M probes per thread; values are medians of five
+samples using the pinned seed and barrier protocol.
+
+| Structure | 1t | 2t | 4t | 8t | 8t/1t |
+|---|---:|---:|---:|---:|---:|
+| sharded | **158.18** | 80.26 | 97.99 | 103.64 | 0.66× |
+| snapshot | 125.45 | **247.04** | **470.77** | **566.04** | **4.51×** |
+| epoch | 126.31 | 229.40 | 397.90 | 430.55 | 3.41× |
+
+This isolates the concurrency machinery: preload and warmup are outside the timer, probes target
+the full preloaded set, and there are no timed writes. Snapshot is 5.46× sharded and 31.5% faster
+than epoch at 8 threads. Epoch is still 4.15× sharded. The `RwLock` result exposes reader-side
+atomic contention (read acquires mutate a shared lock word), while both immutable-pointer designs
+scale without that coherence traffic. Snapshot beats epoch because its guarded load is cheaper
+here than pinning/unpinning crossbeam epoch on every point lookup. Raw samples are in
+`bench-results/read100-preloaded-2m.csv`.
+
+**Dataset-matched fairness control.** Repeating read100 with the main matrix's exact clustered
+preload makes it directly comparable to read99_5/read95. Five-sample medians:
+
+| Structure | 1t | 2t | 4t | 8t | 8t/1t |
+|---|---:|---:|---:|---:|---:|
+| sharded | **38.13** | 51.99 | 88.42 | 98.22 | 2.58× |
+| snapshot | 34.99 | **63.41** | **129.92** | **183.83** | **5.25×** |
+| epoch | 35.33 | 62.75 | 125.09 | 168.38 | 4.77× |
+
+The qualitative conclusion survives—snapshot/epoch are 1.87×/1.71× sharded at 8 threads—but
+the balanced dense preload's 5.46×/4.15× advantages do not. With one easy bitmap container per
+shard, the balanced test minimizes container work and exposes synchronization overhead almost
+alone; clustered data adds realistic key/container searches. Raw control samples are in
+`bench-results/read100-clustered.csv`.
+
+**Fresh full-matrix control at 8 threads** (one same-run sample, 2 M ops/thread; all thread counts
+are in the raw CSV):
+
+| Workload | Sharded | Snapshot | Epoch |
+|---|---:|---:|---:|
+| read99_5 | **84.97** | 34.11 | 39.03 |
+| read95 | **76.37** | 2.394 | 3.029 |
+| mixed50 | **52.04** | 0.196 | 0.195 |
+| write95 | **38.96** | 0.089 | 0.058 |
+
+Within each row this is fair strategy work: fresh maps, identical clustered preload, seeds,
+operation sequences, thread counts, barrier, and release binary. Across thread counts, fixed work
+is *per thread*, so higher-thread write cells also grow the map more and increase RCU clone size;
+the curves therefore measure realistic scaling-plus-state-growth, not fixed-total-work scaling.
+The full matrix is a single sample because one pass takes about 23 minutes; use it for large
+effects, not sub-10% claims. Raw rows are in `bench-results/scaling-fresh.csv`.
+
 ### OPT — Post-P8a optimization pass (user-directed, between P8a and P8b)
 
 Four changes, measured incrementally (deviations recorded below): **(1)** fat-LTO / single-CGU
@@ -270,6 +341,14 @@ the two runs (e.g. sharded read95 8t 75.97 vs 69.99) are run-to-run variance._
 ---
 
 ## Deviations from Plan
+
+**POST-P9 · 2026-07-21** — User-directed RCU sensitivity benchmarks. Added `read99_5` (99.5%
+`contains`, 0.5% `insert`) to the scaling matrix; probability draws now use basis points
+(`0..10_000`) so 99.5% is exact while existing workload probabilities remain unchanged. Added the
+focused `read100_preloaded` binary because the main scaling protocol always includes writes and
+preloads only its clustered dataset: this benchmark inserts exactly 2 M balanced, distinct values
+outside the timer, then measures only successful reads. It directly tests the immutable-pointer
+designs in their intended regime without changing the plan's original comparable matrix.
 
 **P8b · 2026-07-10** — Two notes, neither a semantic departure: (1) `insert`/`remove` share one
 private `update(x, present)` RCU helper, same single-source shape (and same rationale) as the P8a

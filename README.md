@@ -1,5 +1,22 @@
 # concurrent_roaring
 
+📺 **[Watch the 22-minute video overview](https://youtu.be/L4QXeLQ10xA)** — a walkthrough of the ideas and concepts behind this project.
+📝 **[Project notes](https://drive.google.com/file/d/1GIMjvDfD_29o9dKctOeQ380kKHqjKkJS/view?usp=sharing)** — the working notes I kept while building it.
+
+## The starting question
+
+This project started from one simple question: **how do you efficiently store a ton of `u32`s?**
+
+A naive `HashSet<u32>` or `Vec<u32>` works, but it wastes memory and cache lines once you're storing
+millions of integers — especially when those integers cluster into dense runs or repeat the same
+high bits over and over. Roaring bitmaps solve this by splitting each `u32` into a 16-bit "key" and
+a 16-bit "low" value, grouping values that share a key into a small container, and picking whichever
+container representation (array, bitmap, or run) is smallest for that group. That single idea —
+adaptive, per-group compression — is the seed the rest of this project grew from: once you have a
+fast sequential structure, the natural follow-up question is whether you can make it safe to share
+across threads without giving back the performance you just earned. That's Baseline A/B split
+described below.
+
 ## Overview
 
 A concurrent [Roaring bitmap](https://roaringbitmap.org/) for `u32` values in Rust — a compressed
@@ -182,9 +199,14 @@ that would muddy which of the two questions is being answered. Numeric goals: **
 - **Sequential benchmarks:** criterion 0.5, ours and the `roaring` crate side by side on identical
   inputs — build, contains, remove, and/or across the dataset matrix.
 - **Scaling harness** (`src/bin/scaling.rs`): pre-populate with the clustered dataset; workloads
-  read95 (95% contains / 5% insert), mixed50, write95; threads {1, 2, 4, 8} (16 requested, clamped
-  to the box); per-thread seeded RNGs (`0x5CA1_AB1E ^ thread_index`); all threads released by a
-  barrier, 2 M ops each; throughput = total ops / wall time. Results in `bench-results/scaling.csv`.
+  read99_5 (99.5% contains / 0.5% insert), read95, mixed50, write95; threads {1, 2, 4, 8}
+  (16 requested, clamped to the box); per-thread seeded RNGs (`0x5CA1_AB1E ^ thread_index`); all
+  threads released by a barrier, 2 M ops each; throughput = total ops / wall time. Results in
+  `bench-results/scaling.csv`.
+- **Pure-read harness** (`src/bin/read100_preloaded.rs`): preload exactly 2 M distinct values
+  outside the timer, balanced across all 64 default shards; then run successful `contains` only,
+  with the same thread counts, seed, barrier, and 2 M operations per thread. Five-sample medians;
+  raw results in `bench-results/read100-preloaded-2m.csv`.
 - **Correctness:** every operation is differentially tested against the `roaring` crate under
   proptest (random op streams, every return value compared), plus invariant checks and two
   concurrent stress patterns (a disjoint-partition lost-update detector and a contended
@@ -219,6 +241,19 @@ Same-run sequential references: build/clustered 10.241 ms, contains/clustered 17
 | snapshot | 0.048 | 0.070 | 0.096 | 0.106 |
 | epoch | 0.045 | 0.073 | 0.078 | 0.059 |
 
+**Pure-read sensitivity after the untimed 2 M-value preload** (Mops/s, five-sample medians):
+
+| read100 | 1t | 2t | 4t | 8t | 8t/1t |
+|---|---:|---:|---:|---:|---:|
+| sharded | **158.18** | 80.26 | 97.99 | 103.64 | 0.66× |
+| snapshot | 125.45 | **247.04** | **470.77** | **566.04** | **4.51×** |
+| epoch | 126.31 | 229.40 | 397.90 | 430.55 | 3.41× |
+
+A five-sample read100 control on the same clustered preload as the mixed matrix reached 98.22 /
+183.83 / 168.38 Mops at 8 threads (sharded/snapshot/epoch). The lock-free conclusion holds, but
+the smaller 1.87×/1.71× advantages show that the balanced 2 M-value result is an isolation test,
+not a workload-independent speedup claim.
+
 **Baseline B — ours vs the `roaring` crate** (ratio = ours ÷ reference; <1 means ours is faster):
 build 0.61×/1.02×/0.64× (dense/sparse/clustered), contains 0.94×/0.54×/0.67×, remove 0.96×,
 and/or between 0.004× and 0.98×. The dramatic set-operation wins are structural, not artifacts:
@@ -239,44 +274,42 @@ our operands are `optimize()`d into run containers, and `roaring` 0.10 has no ru
   sharded at 2.43×; sharded and epoch are both monotonic through 8 threads (2.43×/1.83×), while
   snapshot dips at 2 threads. Causes: the M5's ~4 performance cores knee every curve at 4 threads
   (added threads land on efficiency cores), and the RCU types serialize on per-shard clones
-  because every workload in the matrix contains writes.
+  because every workload in that matrix contains writes. The separate pure-read sensitivity run
+  confirms the RCU premise: snapshot reaches 4.51× and epoch 3.41× at 8 threads, while sharded
+  falls below its own 1-thread throughput due to reader-side lock-word contention.
 - **T3 (≤2× of `roaring` everywhere): met with margin** — worst unfavorable ratio is 1.02×
   (`build/sparse`), statistical parity, after an optimization pass (structure-of-arrays key
   layout, cache-line-padded shards, fat LTO) documented in `commit.md`.
 
 ## Tradeoff analysis
 
-**Sharded `RwLock` — wins almost everywhere; that is the honest headline.** It has negative tax,
-the highest absolute throughput in every measured cell (69.99 vs 4.14 Mops at read95/8t), and
-write throughput three orders of magnitude above the RCU types. Its weakness is structural, not
-visible in these numbers: even a *reader* performs an atomic read-modify-write on the shard's lock
-word, so readers on the same shard bounce a cache line, and a writer stalls all readers on its
-shard for the duration of the write. With 64 shards and only 5% writes that cost is small — the
-curves flatten past 4 threads mostly because of core topology — but it grows with write rate,
-reader concurrency per shard, and write-hold time.
+**Sharded `RwLock` — wins every write-containing workload, but not pure reads.** It has negative
+tax, the highest absolute throughput in every mixed cell (69.99 vs 4.14 Mops at read95/8t), and
+write throughput three orders of magnitude above the RCU types. In the pure-read run, however,
+even readers atomically modify each shard's lock word; cache-line bouncing cuts total throughput
+from 158.18 Mops at 1 thread to 103.64 at 8, while the lock-free types scale. A writer also stalls
+all readers on its shard. This is the precise crossover: excellent when any meaningful write
+fraction makes RCU cloning dominant, poor when many threads only read.
 
-**Snapshot (`arc-swap`) — pays a fixed toll per read, removes reader/writer interference.** Reads
-touch no lock and never block, so a reader can never be stalled by a writer (predictable read
-latency — the property the `RwLock` cannot offer). The price: every write clones an entire shard
-(~52× single-threaded build cost), and even the read path's `ArcSwap` guard load costs ~6 pp more
-tax than a bare lock acquire. Eager `Arc` reclamation is its quiet advantage under write churn:
-each retired snapshot is freed immediately by whoever drops the last reference, so memory and
-latency stay steady — snapshot keeps improving through 8 threads on write95 (0.096 → 0.106 Mops)
-where epoch regresses.
+**Snapshot (`arc-swap`) — the pure-read throughput winner, with expensive writes.** Reads touch no
+lock and never block, so they reach 566.04 Mops at 8 threads (4.51× the 1-thread rate and 5.46×
+sharded). The price: every write clones an entire shard (~52× single-threaded build cost), and the
+read path's `ArcSwap` guard load costs ~6 pp more single-thread tax than a bare lock acquire. Eager
+`Arc` reclamation is also its advantage under write churn: each retired snapshot is freed when its
+last reference drops, so memory and latency stay steadier than epoch reclamation.
 
-**Epoch (`crossbeam-epoch`) — the best pure-read scaler, the worst under write churn.** Its read95
-curve is monotonic through 8 threads and keeps growing where sharded's 4t→8t step nearly flattens
-(+7.9%), because its read path is a pin + `Acquire` load with no shared-cache-line write at all —
-architecturally the cleanest read path of the three. But
-deferred reclamation cuts both ways: with many threads pinning constantly, epoch advancement lags,
-retired O(shard) snapshots accumulate, and their destruction lands in bursts on worker threads —
-write95 *drops* from 0.078 to 0.059 Mops between 4 and 8 threads while `Arc`'s eager frees keep
-snapshot inching up. The reclamation scheme's payoff is confined to the read path.
+**Epoch (`crossbeam-epoch`) — lock-free reads scale, but per-operation pinning costs more.** It
+reaches 430.55 Mops at 8 threads (3.41× its 1-thread rate and 4.15× sharded), but snapshot is 31%
+faster there: on this workload, `ArcSwap`'s guard load is cheaper than pinning and unpinning the
+epoch on every lookup. Deferred reclamation also cuts both ways under writes: retired snapshots
+can accumulate and their destruction lands in bursts on workers, so write95 drops from 0.078 to
+0.059 Mops between 4 and 8 threads while eager `Arc` reclamation keeps improving.
 
 **Rule of thumb from the data:** under any workload with a nontrivial write fraction, sharding
 plus a fast `RwLock` is simply the right call at this scale. The RCU designs make sense only when
 reads must never block (tail-latency guarantees) or the write fraction is near zero — and between
-them, choose epoch for read scaling, snapshot for predictable behavior under writes.
+them, snapshot delivered both higher pure-read throughput and steadier behavior under writes on
+this machine; epoch remains valuable when deferred reclamation is itself the desired design.
 
 ## Limitations
 

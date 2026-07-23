@@ -20,6 +20,8 @@ use std::time::Instant;
 const OPS: usize = 2_000_000;
 /// Per-thread RNG seed base, XORed with the thread index.
 const SEED_BASE: u64 = 0x5CA1_AB1E;
+/// Basis points preserve the existing percentages while allowing the 99.5%-read RCU workload.
+const PROBABILITY_SCALE: u32 = 10_000;
 
 /// A structure exposing the two hot-path ops the workloads drive, both through `&self` so many
 /// threads share one instance. (`sequential` runs single-threaded and does not use this.)
@@ -55,12 +57,12 @@ impl ConcurrentBench for EpochRoaringBitmap {
     }
 }
 
-/// One thread's workload: `read_pct`% membership probes (drawn from the pre-populated dataset) and
-/// the rest uniform-random inserts.
-fn worker<B: ConcurrentBench>(bench: &B, data: &[u32], read_pct: u32, seed: u64) {
+/// One thread's workload: membership probes drawn from the pre-populated dataset and otherwise
+/// uniform-random inserts.
+fn worker<B: ConcurrentBench>(bench: &B, data: &[u32], read_basis_points: u32, seed: u64) {
     let mut rng = StdRng::seed_from_u64(seed);
     for _ in 0..OPS {
-        if rng.random_range(0..100) < read_pct {
+        if rng.random_range(0..PROBABILITY_SCALE) < read_basis_points {
             let idx = rng.random_range(0..data.len());
             black_box(bench.contains(data[idx]));
         } else {
@@ -71,7 +73,7 @@ fn worker<B: ConcurrentBench>(bench: &B, data: &[u32], read_pct: u32, seed: u64)
 
 /// Sequential baseline: single thread, no locks, no barrier. Runs the identical op mix on a plain
 /// `&mut RoaringBitmap` so its number is a true concurrency-machinery-free reference.
-fn run_sequential(data: &[u32], read_pct: u32) -> (usize, f64) {
+fn run_sequential(data: &[u32], read_basis_points: u32) -> (usize, f64) {
     let mut map = RoaringBitmap::new();
     for &x in data {
         map.insert(x);
@@ -79,7 +81,7 @@ fn run_sequential(data: &[u32], read_pct: u32) -> (usize, f64) {
     let mut rng = StdRng::seed_from_u64(SEED_BASE);
     let start = Instant::now();
     for _ in 0..OPS {
-        if rng.random_range(0..100) < read_pct {
+        if rng.random_range(0..PROBABILITY_SCALE) < read_basis_points {
             let idx = rng.random_range(0..data.len());
             black_box(map.contains(data[idx]));
         } else {
@@ -96,7 +98,7 @@ fn run_sequential(data: &[u32], read_pct: u32) -> (usize, f64) {
 fn run_concurrent<B: ConcurrentBench>(
     bench: &B,
     data: &[u32],
-    read_pct: u32,
+    read_basis_points: u32,
     threads: usize,
 ) -> (usize, f64) {
     let barrier = Barrier::new(threads + 1);
@@ -106,7 +108,7 @@ fn run_concurrent<B: ConcurrentBench>(
             .map(|t| {
                 s.spawn(move || {
                     barrier.wait();
-                    worker(bench, data, read_pct, SEED_BASE ^ t as u64);
+                    worker(bench, data, read_basis_points, SEED_BASE ^ t as u64);
                 })
             })
             .collect();
@@ -174,14 +176,19 @@ fn main() {
         .filter(|&n| n <= max_threads)
         .collect();
 
-    let workloads: [(&str, u32); 3] = [("read95", 95), ("mixed50", 50), ("write95", 5)];
+    let workloads: [(&str, u32); 4] = [
+        ("read99_5", 9_950),
+        ("read95", 9_500),
+        ("mixed50", 5_000),
+        ("write95", 500),
+    ];
     let structures = ["sequential", "sharded", "snapshot", "epoch"];
 
     let data = datasets::clustered();
     let mut rows: Vec<Row> = Vec::new();
 
     for structure in structures {
-        for &(workload, read_pct) in &workloads {
+        for &(workload, read_basis_points) in &workloads {
             // `sequential` is single-thread-only; every other structure runs the full sweep.
             let counts: &[usize] = if structure == "sequential" {
                 &[1]
@@ -190,27 +197,27 @@ fn main() {
             };
             for &threads in counts {
                 let (total_ops, seconds) = match structure {
-                    "sequential" => run_sequential(&data, read_pct),
+                    "sequential" => run_sequential(&data, read_basis_points),
                     "sharded" => {
                         let bench = ConcurrentRoaringBitmap::new();
                         for &x in &data {
                             bench.insert(x);
                         }
-                        run_concurrent(&bench, &data, read_pct, threads)
+                        run_concurrent(&bench, &data, read_basis_points, threads)
                     }
                     "snapshot" => {
                         let bench = SnapshotRoaringBitmap::new();
                         for &x in &data {
                             bench.insert(x);
                         }
-                        run_concurrent(&bench, &data, read_pct, threads)
+                        run_concurrent(&bench, &data, read_basis_points, threads)
                     }
                     "epoch" => {
                         let bench = EpochRoaringBitmap::new();
                         for &x in &data {
                             bench.insert(x);
                         }
-                        run_concurrent(&bench, &data, read_pct, threads)
+                        run_concurrent(&bench, &data, read_basis_points, threads)
                     }
                     _ => unreachable!(),
                 };
