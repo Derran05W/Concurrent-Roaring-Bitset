@@ -28,6 +28,77 @@ implementation departed from the plan in any way.
 
 ## Benchmark Ledger
 
+### POST-P9 — Concurrency tax and external wrappers, 2026-10-14
+
+**Baseline A:** current Criterion quick-run medians, single-thread clustered workload from the
+original tax harness (unoptimized preload). These compare each concurrent type with our own
+sequential bitmap. Quick estimates corroborate the comparison; they are not five independent
+process trials and do not constitute a new full-P6 T1 sweep.
+
+| Type | Build ms | Build tax | Contains ms / million | Read tax |
+|---|---:|---:|---:|---:|
+| Sequential | 9.844 | reference | 18.810 | reference |
+| Sharded | 8.999 | −8.59% | 16.668 | −11.39% |
+| Snapshot | 533.665 | +5321.06% | 17.626 | −6.29% |
+| Epoch | 548.356 | +5470.30% | 18.661 | −0.79% |
+
+The 10% tax target is met for this read cell and sharded construction; clone-per-write makes
+RCU construction miss it by orders of magnitude. The reduction in keys searched per shard can
+offset synchronization cost, as in the historical analysis. Current source adds a span check
+on gapped maps; exploratory before/after measurements are not used for a causal regression claim.
+
+**Baseline C:** five-process median pure-read throughput at eight threads, Mops/s, 50% stable hits.
+Published wrappers use identical 64-shard mapping, locks, and padding. These measure end-to-end
+mutable structures, not native immutable library readers.
+
+| Dataset | Sharded | Snapshot | Epoch | Sharded roaring | Sharded croaring | DashSet |
+|---|---:|---:|---:|---:|---:|---:|
+| Dense | 73.83 | 982.08 | 640.97 | 69.04 | 71.13 | 113.97 |
+| Sparse | 100.86 | 187.64 | 192.04 | 87.26 | 88.52 | 110.06 |
+| Clustered | 104.59 | 552.03 | 428.12 | 103.43 | 111.37 | 107.80 |
+| Balanced | 98.58 | 1059.50 | 662.96 | 95.16 | 98.77 | 110.10 |
+
+**T2:** missed on the new successful-write trace. No production strategy reaches 4× at eight
+threads on any dataset in the 95%-read matrix; only sparse snapshot/epoch scale monotonically.
+At eight threads on sparse 95/5, sharded reaches 91.59 Mops/s versus snapshot 1.89 and epoch 2.42.
+Shared lock-word traffic, per-shard writer serialization, RCU cloning, heterogeneous cores, and
+scheduler overhead in short traces all limit scaling; these are source-level mechanisms, not
+profiled causal attribution. Full 1/2/4/8-thread tables and no-op controls are in
+[the report](docs/external-benchmarks.md#concurrent-interpretation-baseline-c).
+
+The [Criterion archive](docs/benchmark-results/criterion.json) retains estimates and samples for
+all 228 external cells and eight tax cells. Current external lookup wins are corroborated in all
+four datasets. Historical Criterion `change` comparisons are not used as before/after evidence.
+
+### POST-P9 — Published implementations, 2026-10-14 (Baseline B)
+
+Five independent process trials on Apple M5; optimized warm membership, exactly 50% hits.
+Versions: `roaring` 0.11.5; `croaring` 2.8.0 / CRoaring 5.2.2. Each cell runs four million
+queries against identical seeded input and probe sequences. Numbers are median Mops/s.
+
+| Dataset | Ours | roaring | croaring | Ours / roaring | Ours / croaring |
+|---|---:|---:|---:|---:|---:|
+| Dense | 291.38 | 111.10 | 149.89 | 2.62× | 1.94× |
+| Sparse | 149.12 | 21.97 | 19.39 | 6.79× | 7.69× |
+| Clustered | 69.47 | 56.31 | 40.51 | 1.23× | 1.71× |
+| Balanced | 304.76 | 84.51 | 100.14 | 3.61× | 3.04× |
+
+Sparse observed ranges: ours 142.39–150.39, roaring 21.54–22.04, croaring 19.00–19.69 Mops/s.
+The complete [results](docs/external-results.md) and [raw summaries](docs/benchmark-results/summary.csv)
+retain every workload and trial, including build/optimize costs and unfavorable set operations.
+[Methodology](docs/external-benchmarks.md) records hardware, lifecycle, trace overhead, exact hit
+ratios, representation parity, and limitations. This is a workload-specific lookup win.
+
+**T3 cause analysis:** current reference versions expose gaps absent from the historical 0.10
+comparison. Bitmap-to-run conversion visits every set bit, making dense/balanced optimize
+75–169× slower than the published implementations; clustered optimize is 3.0–4.5× slower.
+Our linear key merge lacks CRoaring's `ra_advance_until` skip, explaining the unfavorable
+range-separated disjoint intersection cases (3.4× clustered, 127–169× sparse). Sparse build and
+successful removal trail CRoaring by 2.3× and 2.7×, respectively; vector shifts, metadata layout,
+and container kernels differ. These are source-level explanations, not profiler measurements.
+No universal performance-parity or fastest-bitmap claim is made. Full discussion is in the report.
+
+
 Numbers land here as phases complete. Every table states which baseline (A: concurrency tax,
 B: absolute reference) it addresses. Include the machine spec line once, above the first table.
 
@@ -341,6 +412,22 @@ the two runs (e.g. sharded read95 8t 75.97 vs 69.99) are run-to-run variance._
 ---
 
 ## Deviations from Plan
+
+**POST-P9 · 2026-10-14** — User-directed published-library comparison and optimization.
+The external plan's initial “keep library code unchanged” restriction was superseded by the user's
+explicit request to optimize. `contains` now proves a contiguous key span from existing sorted-key
+metadata and indexes its container directly; gapped maps retain binary search. This changes §2.5's
+pinned lookup algorithm without adding cached cardinality, an auxiliary index, unsafe code, SIMD,
+or a public operation. `AGENTS.md` remains static.
+
+The comparison upgrades the benchmark-only `roaring` dependency to 0.11.5 and adds `croaring` 2.8.0
+(CRoaring 5.2.2) and DashSet controls. Current references receive run optimization. Historical July
+numbers stay labeled with their original versions. External mutable wrappers use the same shard
+mapping, padding, and locks and form Baseline C; they do not replace Baseline A concurrency tax.
+The successful-write trace restores values between cells instead of rebuilding each map inside a
+process; each outer trial is a fresh process. Small mixed cells retain visible scheduler overhead,
+which is documented rather than subtracted. The headline uses five-trial sequential lookup.
+
 
 **POST-P9 · 2026-07-21** — User-directed RCU sensitivity benchmarks. Added `read99_5` (99.5%
 `contains`, 0.5% `insert`) to the scaling matrix; probability draws now use basis points
@@ -665,7 +752,45 @@ Next: — (project complete)
 
 ---
 
+### POST-P9 — External comparison and direct key lookup (2026-10-14)
+Commit: this entry's commit
+Done: Added current `roaring`/`croaring` adapters, matched sharded references, ordinary-set controls,
+Criterion suite, deterministic raw concurrent/memory harness, exact hit/mutation checks, external
+property tests, exhaustive key-boundary tests, source/binary provenance, result summaries and plots.
+`contains` now directly indexes proven contiguous high-key spans with no additional stored metadata.
+Updated README and archived current results separately from historical and exploratory runs.
+
+Measured: Baseline B sparse warm 50%-hit lookup **149.12 Mops/s**, **6.79× roaring / 7.69× croaring**;
+all four optimized lookup datasets beat both references. Baseline A current read taxes within the
+10% goal; RCU construction still misses it. Baseline C snapshot pure reads reach 1059.50 Mops/s on
+balanced 8-thread data, while successful-write scaling misses T2. See the new ledger sections and
+cause analyses. Memory (Baseline B sequential / Baseline C wrappers): 440 fresh-process rows;
+sparse RSS 12.16/13.30/12.48 MiB for ours/roaring/croaring, and 13.48/23.56/95.58 MiB for our
+sharded/snapshot/epoch. No general memory-saving claim. All raw trials, controls, metadata, lockfile,
+Criterion samples, and plots are committed in `docs/benchmark-results/`.
+
+Validation: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (38 tests);
+`cargo test --release --test external --test concurrent_stress --example compare` (13 tests);
+`cargo bench --bench competitors -- --quick` (228 cells),
+`cargo bench --bench sequential -- tax/ --quick` (8 cells). Five-trial raw sequential and concurrent
+matrices complete with correctness assertions; all eleven memory candidates complete. Final report
+checks exact row counts and five trials per summary group. Graphs visually inspected.
+Deviations: **POST-P9 · 2026-10-14**, above. `AGENTS.md` unchanged.
+Next: — (requested comparison and optimization complete)
+
+---
+
 ## Resume Bullets
+
+### Current, scoped claim (October 2026)
+
+- Optimized a Rust Roaring bitmap to sustain **149M warm membership queries/s**, **6.8× faster
+  than roaring 0.11.5 and 7.7× faster than croaring 2.8.0** on one million seeded random `u32`
+  inputs with 50% hit queries; validated against both libraries with differential tests and five
+  independent trials on Apple M5. [Evidence and limitations](docs/external-benchmarks.md).
+
+### Historical phase claims (July 2026 baselines)
+
 
 - Built a concurrent Roaring bitmap in Rust and benchmarked three concurrency strategies —
   sharded `RwLock` vs. RCU (`arc-swap`) and epoch-based (`crossbeam-epoch`) lock-free reads —

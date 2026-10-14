@@ -1,0 +1,19 @@
+{
+  "mode": "reads",
+  "command": [
+    "scripts/compare.py",
+    "reads",
+    "--output",
+    "bench-results/external-span-pilot",
+    "--samples",
+    "3",
+    "--candidates",
+    "ours"
+  ],
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)\nbinary: rustc\ncommit-hash: 2d8144b7880597b6e6d3dfd63a9a9efae3f533d3\ncommit-date: 2026-07-07\nhost: aarch64-apple-darwin\nrelease: 1.97.0\nLLVM version: 22.1.6",
+  "commit": "042da269541cda0b04fb033f19b16cecce058096",
+  "date": "2026-10-14T16:03:44+0200",
+  "cpu_count": 10,
+  "binary_sha256": "b04d9d8c5ed9ebcb5be6cc4e76967a5310a02b801832275b0e7e5026bfa29166"
+}

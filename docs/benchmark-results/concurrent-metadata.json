@@ -1,0 +1,42 @@
+{
+  "source_sha256": {
+    "Cargo.toml": "9cdafc694cbf8ea980875cffe84018c0858133a1e5cec82c550029c92cc8ed91",
+    "Cargo.lock": "28f6391093956fa7cc027197352541d229c760afd97e4318edbd496288005225",
+    "src/lib.rs": "b08dd540977c6b050b4192b9d983eb6d48a661bfe740dd933fe2883582868f73",
+    "src/bitmap.rs": "6ba67ab0b2d53d02e0ac15612ca7ef267951f2b8406abef54e67cb158655641f",
+    "src/bin/read100_preloaded.rs": "1c7dd1651cb5cd43493a3c6bd0cef316e320055543963f7ea742588786ec9b39",
+    "src/bin/scaling.rs": "a5ca76980456577192f2a9a34d81eed5c2605cca1a0e444976a6502a28090915",
+    "src/container/run.rs": "914052be40cbfaf3873f8949853c4d4d81b8dda0d950356dbcd38829d4b47741",
+    "src/container/mod.rs": "9402d68ed22fa26d1613427cc3261fb7cc194606c95c0ccc77f5fdc81c9770ac",
+    "src/container/bitmap.rs": "98ad5a4c7be3a42d8d2c6596af9acf9a42f08fac0f2fee60541e0550e5c6adfb",
+    "src/container/array.rs": "22cd39346fdb41baf241abba36f67bf5605d6b6caa948f1b8ac144978d495568",
+    "src/concurrent/sharded.rs": "7cc82a2597bdadc8f567174f1c4d27c6efa3b09a96aec510501e3dcaa7c19fe3",
+    "src/concurrent/mod.rs": "0d7c9003764c1ceacb94f78f8f013e0cc14e47d0418217aa80c652939acf3531",
+    "src/concurrent/snapshot.rs": "8ff5c8ab8233281f5af8bb9de16bc37f4ee62a6164c8b3b8ef4f6842fed7f2d3",
+    "src/concurrent/epoch.rs": "9bdc2447a2c9358002d778f69aab67925874c42b72fc6858f1f12fd4ff4f56a2",
+    "benches/competitors.rs": "8d403c539a75eb96db89b7c08d04ce253cc8d709b61469a67779f0a57b8f77fe",
+    "benches/sequential.rs": "e956aa7c95b451a9d2994c763e2c4c9066b0ea17861126ca67261c44b2afc207",
+    "benches/support/mod.rs": "c02072b4856d7235e493b9089dc8e3061960625f5e9213640a8c882c21a0f1e2",
+    "examples/compare.rs": "33201344049b886df4d05fde8b4aa1f28ebd249802cbb7ab56e5e41ddd702882"
+  },
+  "build_env": {
+    "RUSTFLAGS": null,
+    "CFLAGS": null,
+    "ROARING_ARCH": null
+  },
+  "mode": "concurrent",
+  "command": [
+    "scripts/compare.py",
+    "concurrent",
+    "--output",
+    "bench-results/external",
+    "--samples",
+    "5"
+  ],
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)\nbinary: rustc\ncommit-hash: 2d8144b7880597b6e6d3dfd63a9a9efae3f533d3\ncommit-date: 2026-07-07\nhost: aarch64-apple-darwin\nrelease: 1.97.0\nLLVM version: 22.1.6",
+  "commit": "042da269541cda0b04fb033f19b16cecce058096",
+  "date": "2026-10-14T16:29:05+0200",
+  "cpu_count": 10,
+  "binary_sha256": "d9304e63b4d8a6cd0c23c1018741f0b5dfbe021c275624c967d8eaa4a6545cd5"
+}

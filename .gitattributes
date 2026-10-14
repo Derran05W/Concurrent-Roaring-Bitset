@@ -1,0 +1,2 @@
+# Patch context lines intentionally retain their diff prefix on blank lines.
+docs/benchmark-results/**/working-tree.patch -whitespace

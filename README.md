@@ -3,6 +3,18 @@
 📺 **[Watch the 22-minute video overview](https://youtu.be/L4QXeLQ10xA)** — a walkthrough of the ideas and concepts behind this project.
 📝 **[Project notes](https://drive.google.com/file/d/1GIMjvDfD_29o9dKctOeQ380kKHqjKkJS/view?usp=sharing)** — the working notes I kept while building it.
 
+## Current external comparison (October 2026)
+
+Optimized sequential membership queries reached **149 million/s** on one million seeded random
+`u32` inputs with 50% hits: **6.8× `roaring` 0.11.5 and 7.7× `croaring` 2.8.0** in five
+fresh-process trials on Apple M5. A direct container lookup for contiguous high-key spans adds
+no stored index metadata. This is a warm lookup result; construction, compression, and some
+set operations remain slower than the published implementations.
+
+See the [current results](docs/external-results.md), [methodology and limitations](docs/external-benchmarks.md),
+and [raw trial summary](docs/benchmark-results/summary.csv). The phase results below describe
+the original July experiment against `roaring` 0.10.12 and are preserved as historical results.
+
 ## The starting question
 
 This project started from one simple question: **how do you efficiently store a ton of `u32`s?**

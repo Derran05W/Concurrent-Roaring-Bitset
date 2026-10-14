@@ -19,7 +19,9 @@ crossbeam-epoch = "0.9"
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1"
-roaring = "0.10"
+roaring = "0.11.5"
+croaring = "2.8"
+dashmap = "6.2"
 
 # Fat LTO + one codegen unit: lets the hot container/bitmap paths inline across crate boundaries
 # into the bench and scaling binaries. Applies equally to ours and the `roaring` reference in the
@@ -30,4 +32,8 @@ codegen-units = 1
 
 [[bench]]
 name = "sequential"
+harness = false
+
+[[bench]]
+name = "competitors"
 harness = false

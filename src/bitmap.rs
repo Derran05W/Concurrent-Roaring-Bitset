@@ -110,6 +110,17 @@ impl RoaringBitmap {
 
     pub fn contains(&self, x: u32) -> bool {
         let (key, low) = split(x);
+        let Some(&first) = self.keys.first() else {
+            return false;
+        };
+        // Sorted unique keys fill their span iff span == length. This gives direct lookup
+        // without an auxiliary index, and avoids a failed speculative lookup on gapped keys.
+        if usize::from(self.keys[self.keys.len() - 1] - first) + 1 == self.keys.len() {
+            return self
+                .containers
+                .get(usize::from(key.wrapping_sub(first)))
+                .is_some_and(|container| container.contains(low));
+        }
         match self.keys.binary_search(&key) {
             Ok(i) => self.containers[i].contains(low),
             Err(_) => false,

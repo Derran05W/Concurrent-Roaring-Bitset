@@ -42,8 +42,7 @@ fn bench_build(c: &mut Criterion) {
     }
 }
 
-/// contains/{dense,sparse,clustered}: pre-built structure, optimize()d on our side (the `roaring`
-/// 0.10 crate exposes no run-optimize equivalent), then iterate the probe stream.
+/// Both implementations use their supported run optimization before lookup timing.
 fn bench_contains(c: &mut Criterion) {
     for (name, data) in [
         ("dense", datasets::dense()),
@@ -52,7 +51,8 @@ fn bench_contains(c: &mut Criterion) {
     ] {
         let mut ours = build_ours(&data);
         ours.optimize();
-        let refb = build_ref(&data);
+        let mut refb = build_ref(&data);
+        refb.optimize();
         let probes = datasets::probes(&data);
 
         let mut g = c.benchmark_group(format!("contains/{name}"));
@@ -134,8 +134,10 @@ fn bench_setops(c: &mut Criterion) {
         let mut ob = build_ours(b_data);
         oa.optimize();
         ob.optimize();
-        let ra = build_ref(a);
-        let rb = build_ref(b_data);
+        let mut ra = build_ref(a);
+        let mut rb = build_ref(b_data);
+        ra.optimize();
+        rb.optimize();
 
         let mut g = c.benchmark_group(format!("and/{name}"));
         g.bench_function("ours", |bch| bch.iter(|| black_box(oa.and(&ob))));
